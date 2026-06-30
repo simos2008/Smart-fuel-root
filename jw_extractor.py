@@ -7,10 +7,10 @@ import time
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
-st.set_page_config(page_title="JW to BTNotes XML", page_icon="📚", layout="wide")
+st.set_page_config(page_title="JW to BTNotes XML", page_icon="📚", layout="centered")
 
 st.title("📚 Μετατροπέας JW Library σε BTNotes XML")
-st.write("Αυτό το εργαλείο μετατρέπει τις σημειώσεις σας σε μορφή συμβατή με το **Bible Talks Notes XML**, διατηρώντας τη δομή φακέλων.")
+st.write("Ανεβάστε το backup αρχείο σας (ανεξάρτητα από το όνομα ή την ημερομηνία) για να πάρετε το XML για το Remix App σας.")
 
 BIBLE_BOOKS = {
     1: "Γένεση", 2: "Έξοδος", 3: "Λευιτικό", 4: "Αριθμοί", 5: "Δευτερονόμιο",
@@ -31,51 +31,53 @@ BIBLE_BOOKS = {
     66: "Αποκάλυψη"
 }
 
+# Δεχόμαστε οποιοδήποτε αρχείο .jwlibrary, όποιο όνομα κι αν έχει
 uploaded_file = st.file_uploader("Ανεβάστε το αρχείο .jwlibrary", type=["jwlibrary"])
 
 if uploaded_file is not None:
+    # Καθαρίζουμε παλιούς φακέλους για ασφάλεια
+    if not os.path.exists("temp_extracted"):
+        os.makedirs("temp_extracted")
+        
     with open("temp_backup.zip", "wb") as f:
         f.write(uploaded_file.getbuffer())
         
-    with zipfile.ZipFile("temp_backup.zip", "r") as zip_ref:
-        zip_ref.extractall("temp_extracted")
+    try:
+        with zipfile.ZipFile("temp_backup.zip", "r") as zip_ref:
+            zip_ref.extractall("temp_extracted")
+            
+        db_path = "temp_extracted/UserData.db"
         
-    db_path = "temp_extracted/UserData.db"
-    
-    if os.path.exists(db_path):
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # Ερώτημα για την εξαγωγή των σημειώσεων
-        query = """
-            SELECT 
-                L.BookNumber, 
-                L.ChapterNumber, 
-                L.VerseNumber, 
-                N.Title, 
-                N.Content, 
-                N.Created
-            FROM Note N
-            JOIN Location L ON N.LocationId = L.LocationId
-            WHERE L.BookNumber IS NOT NULL 
-              AND L.KeySymbol IS NULL;
-        """
-        
-        try:
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            query = """
+                SELECT 
+                    L.BookNumber, 
+                    L.ChapterNumber, 
+                    L.VerseNumber, 
+                    N.Title, 
+                    N.Content, 
+                    N.Created
+                FROM Note N
+                JOIN Location L ON N.LocationId = L.LocationId
+                WHERE L.BookNumber IS NOT NULL 
+                  AND L.KeySymbol IS NULL;
+            """
+            
             cursor.execute(query)
             rows = cursor.fetchall()
             conn.close()
             
             if rows:
-                st.subheader(f"📊 Βρέθηκαν {len(rows)} σημειώσεις.")
+                st.subheader(f"📊 Βρέθηκαν {len(rows)} σημειώσεις σε εδάφια!")
                 
-                # Δημιουργία της ρίζας του XML όπως το BTNotes
+                # Δημιουργία XML ρίζας
                 root = ET.Element("db", serverCounter=str(len(rows) + 50))
                 
-                # 1. Προσθήκη δομής Φακέλων (<folders>)
+                # Φάκελοι
                 folders_element = ET.SubElement(root, "folders")
-                
-                # Δημιουργούμε έναν κεντρικό custom φάκελο για το Import
                 import_folder_uuid = str(uuid.uuid4())
                 ET.SubElement(folders_element, "folder", {
                     "id": "1001",
@@ -85,31 +87,27 @@ if uploaded_file is not None:
                     "password": "null"
                 })
                 
-                # 2. Προσθήκη Σημειώσεων (<talks>)
+                # Σημειώσεις
                 talks_element = ET.SubElement(root, "talks", number=str(len(rows)))
-                
                 current_timestamp = str(int(time.time() * 1000))
                 
                 for idx, row in enumerate(rows, start=1):
                     book_num, chapter, verse, title_text, content_text, created_date = row
-                    
                     book_name = BIBLE_BOOKS.get(book_num, "Άγνωστο Βιβλίο")
                     verse_ref = f"{book_name} {chapter}:{verse}"
                     
-                    # Καθορισμός Τίτλου
                     final_title = str(title_text) if title_text and str(title_text).strip() != "None" else verse_ref
                     final_content = str(content_text) if content_text else ""
                     
-                    # Δημιουργία του <talk>
                     talk_uuid = str(uuid.uuid4())
                     talk_node = ET.SubElement(talk_element, "talk", {
                         "id": str(idx + 100),
                         "uuid": talk_uuid,
                         "last_created": "1",
-                        "lang": "64",  # Ελληνικά / Default τιμή εφαρμογής
+                        "lang": "64",
                         "date": current_timestamp,
                         "last_open": current_timestamp,
-                        "folder": import_folder_uuid  # Σύνδεση με τον φάκελο που φτιάξαμε
+                        "folder": import_folder_uuid
                     })
                     
                     title = ET.SubElement(talk_node, "title")
@@ -118,7 +116,6 @@ if uploaded_file is not None:
                     speaker = ET.SubElement(talk_node, "speaker")
                     speaker.text = "JW Library"
                     
-                    # Δημιουργία παραγράφων εσωτερικά
                     paragrafs = ET.SubElement(talk_node, "paragrafs")
                     paragraf = ET.SubElement(paragrafs, "paragraf", {
                         "id": str(idx + 5000),
@@ -130,36 +127,30 @@ if uploaded_file is not None:
                     
                     text = ET.SubElement(paragraf, "text")
                     text.text = final_content
-                    
-                    # Προσθήκη συνδέσμου εδαφίου αν υπάρχει
-                    verses = ET.SubElement(paragraf, "verses")
-                    # Μπορούμε να αφήσουμε το <verses /> κενό ή να το γεμίσουμε αν η εφαρμογή απαιτεί jw εσωτερικά IDs.
-                    # Για ασφάλεια το αφήνουμε έτοιμο ως tag.
+                    ET.SubElement(paragraf, "verses")
                 
-                # Μορφοποίηση του XML αρχείου για να είναι ευανάγνωστο
                 xml_str = ET.tostring(root, encoding='utf-8')
                 parsed_xml = minidom.parseString(xml_str)
                 pretty_xml = parsed_xml.toprettyxml(indent="    ", encoding="utf-8")
                 
-                # Αποθήκευση
                 xml_filename = "jw_btnotes_import.xml"
                 with open(xml_filename, "wb") as f:
                     f.write(pretty_xml)
                 
                 st.markdown("---")
-                st.success("Το αρχείο XML για το Bible Talks Notes δημιουργήθηκε με επιτυχία!")
+                st.success("Το αρχείο XML δημιουργήθηκε με επιτυχία!")
                 
                 with open(xml_filename, "rb") as f:
                     st.download_button(
-                        label="📥 Κατεβάστε το αρχείο .xml",
+                        label="📥 Κατεβάστε το αρχείο .xml για το Remix App",
                         data=f,
                         file_name="jw_to_btnotes.xml",
                         mime="application/xml"
                     )
             else:
                 st.warning("Δεν βρέθηκαν σημειώσεις βιβλικών εδαφίων στο αρχείο.")
-        except Exception as e:
-            st.error(f"Σφάλμα κατά την επεξεργασία της βάσης: {e}")
-    else:
-        st.error("Το αρχείο δεν περιέχει έγκυρη βάση δεδομένων UserData.db.")
-      
+        else:
+            st.error("Το αρχείο δεν περιέχει έγκυρη βάση δεδομένων UserData.db.")
+            
+    except Exception as e:
+        st.error(f"Σφάλμα κατά την επεξεργασία: {e}")
