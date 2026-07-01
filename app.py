@@ -3,11 +3,10 @@ import pandas as pd
 import urllib.parse
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
-import requests
 import time
 import re
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο v3.7", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο v6.0", page_icon="🚗", layout="centered")
 
 # --- 🌟 SPLASH SCREEN ---
 if 'splash_screen_shown' not in st.session_state:
@@ -38,12 +37,10 @@ if not st.session_state.splash_screen_shown:
     st.session_state.splash_screen_shown = True
     st.rerun()
 
-st.title("🚗 Smart Fuel Router v3.7")
-st.write("Υπολογισμός σειράς με βάση τα ωράρια, 20 λεπτά αναμονή ανά παράδοση και τελικά στατιστικά μέσω OSRM.")
+st.title("🚗 Smart Fuel Router v6.0")
+st.write("Έξυπνη οργάνωση σειράς στάσεων. Τα πραγματικά χιλιόμετρα και οι διαδρομές εμφανίζονται απευθείας στο Google Maps.")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
-AVERAGE_SPEED_KMH = 30
-DELIVERY_DURATION_MINS = 20 
 
 if 'manual_stops' not in st.session_state:
     st.session_state.manual_stops = []
@@ -69,35 +66,11 @@ def time_to_minutes(time_str):
 @st.cache_data(show_spinner=False)
 def get_coordinates(address):
     try:
-        geolocator = Nominatim(user_agent="fuel_router_v37_2026")
+        geolocator = Nominatim(user_agent="fuel_router_v60_2026")
         location = geolocator.geocode(address + ", Ελλάδα", timeout=10)
         if location: return (location.latitude, location.longitude)
     except: return None
     return None
-
-# ΔΙΟΡΘΩΜΕΝΗ ΣΥΝΑΡΤΗΣΗ: Σωστή σειρά Lon,Lat για το OSRM
-def get_final_route_details_osrm_segmented(waypoints_coords):
-    total_duration_mins = 0.0
-    total_distance_km = 0.0
-    
-    for i in range(len(waypoints_coords) - 1):
-        p1 = waypoints_coords[i]
-        p2 = waypoints_coords[i+1]
-        try:
-            # Σωστή σειρά: p1[1] (Longitude) και μετά p1[0] (Latitude)
-            url = f"http://router.project-osrm.org/route/v1/driving/{p1[1]},{p1[0]};{p2[1]},{p2[0]}?overview=false"
-            response = requests.get(url, timeout=5)
-            data = response.json()
-            if data.get("code") == "Ok":
-                total_duration_mins += data["routes"][0]["duration"] / 60
-                total_distance_km += data["routes"][0]["distance"] / 1000
-            time.sleep(0.05)
-        except:
-            dist = geodesic(p1, p2).kilometers * 1.3
-            total_distance_km += dist
-            total_duration_mins += (dist / AVERAGE_SPEED_KMH) * 60
-            
-    return total_duration_mins, total_distance_km
 
 # --- ΦΟΡΤΩΣΗ EXCEL & ΧΕΙΡΟΚΙΝΗΤΑ ---
 uploaded_file = st.file_uploader("Ανεβάστε το αρχείο Excel (.xlsx)", type=["xlsx"])
@@ -168,13 +141,13 @@ if stops_base_list:
             active_stops.append(stop)
 
     ordered_stops = []
-    ordered_coords = [start_coords]
     current_coords = start_coords
     current_time = 8 * 60
     
     unvisited = active_stops.copy()
     
-    # ΥΠΟΛΟΓΙΣΜΟΣ ΣΕΙΡΑΣ
+    # ΥΠΟΛΟΓΙΣΜΟΣ ΒΕΛΤΙΣΤΗΣ ΣΕΙΡΑΣ
+    AVERAGE_SPEED_KMH = 30
     while unvisited:
         best_next = None
         best_score = float('inf')
@@ -198,9 +171,8 @@ if stops_base_list:
                 best_travel_time = travel_time_mins
         
         if best_next:
-            current_time = max(current_time + best_travel_time, best_next['start_time']) + DELIVERY_DURATION_MINS
+            current_time = max(current_time + best_travel_time, best_next['start_time']) + 20
             ordered_stops.append(best_next['address'])
-            ordered_coords.append(best_next['coords'])
             current_coords = best_next['coords']
             unvisited.remove(best_next)
 
@@ -215,30 +187,13 @@ if stops_base_list:
                 best_next = stop
         if best_next:
             ordered_stops.append(best_next['address'])
-            ordered_coords.append(best_next['coords'])
             current_coords = best_next['coords']
             unvisited_postponed.remove(best_next)
 
     if ordered_stops:
-        ordered_coords.append(start_coords)
-        
         st.markdown("---")
-        st.success("Το δρομολόγιο υπολογίστηκε επιτυχώς!")
-        
-        with st.spinner("Υπολογισμός πραγματικών στατιστικών οδικού δικτύου..."):
-            driving_mins, driving_km = get_final_route_details_osrm_segmented(ordered_coords)
-        
-        if driving_km > 0:
-            total_time_mins = driving_mins + (len(active_stops) * DELIVERY_DURATION_MINS)
-            hours, minutes = divmod(int(total_time_mins), 60)
-            
-            st.markdown("### 📊 Στατιστικά Δρομολογίου (Πραγματικοί Δρόμοι)")
-            col_a, col_b = st.columns(2)
-            col_a.metric("Συνολική Απόσταση", f"{driving_km:.1f} χλμ")
-            col_b.metric("Συνολικός Χρόνος", f"{hours}ώ {minutes}λ (μαζί με τις στάσεις)")
-            
-            total_stops_duration = len(active_stops) * DELIVERY_DURATION_MINS
-            st.caption(f"Περιλαμβάνει {total_stops_duration} λεπτά καθαρών στάσεων για παραδόσεις.")
+        st.success("Το δρομολόγιο οργανώθηκε επιτυχώς!")
+        st.write("Πατήστε παρακάτω για να ανοίξετε τα μέρη στο Google Maps. Τα πραγματικά χιλιόμετρα οδικού δικτύου υπολογίζονται αυτόματα εκεί.")
         
         max_waypoints = 8
         chunks = [ordered_stops[i:i + max_waypoints] for i in range(0, len(ordered_stops), max_waypoints)]
