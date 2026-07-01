@@ -9,7 +9,6 @@ import re
 st.set_page_config(page_title="Έξυπνο Δρομολόγιο με Πραγματικούς Δρόμους", page_icon="🚗", layout="centered")
 
 # --- 🔑 OPENROUTESERVICE CONFIGURATION ---
-# Το δικό σου API Key που μόλις έβγαλες
 ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImIwNGFkYjBlMDFlZTQxMmFiYjc4ODg1OTExNTEzMTc5IiwiaCI6Im11cm11cjY0In0="
 try:
     ors_client = openrouteservice.Client(key=ORS_API_KEY)
@@ -128,22 +127,18 @@ def get_coordinates(address):
         return None
     return None
 
-# Νέα συνάρτηση που καλεί το API του OpenRouteService
 def get_route_data_ors(coords_start, coords_end):
     try:
-        # Το ORS δέχεται τις συντεταγμένες ανάποδα (Longitude, Latitude)
         coords = [[coords_start[1], coords_start[0]], [coords_end[1], coords_end[0]]]
         routes = ors_client.directions(
             coordinates=coords,
             profile='driving-car',
             format='geojson'
         )
-        # Παίρνουμε τη διάρκεια σε δευτερόλεπτα και την απόσταση σε μέτρα
         duration_mins = routes['features'][0]['properties']['summary']['duration'] / 60
         distance_km = routes['features'][0]['properties']['summary']['distance'] / 1000
         return duration_mins, distance_km
     except Exception as e:
-        # Back-up σε περίπτωση που αποτύχει το API (χρησιμοποιεί μια μέση εκτίμηση)
         from geopy.distance import geodesic
         dist = geodesic(coords_start, coords_end).kilometers
         return (dist / 30) * 60, dist
@@ -238,5 +233,90 @@ if stops_base_list:
     st.subheader("📋 Διαχείριση Παραδόσεων & Απουσιών")
     st.write("Αν κάποιος λείπει, τσεκάρετέ τον για να μεταφερθεί στο τέλος του δρομολογίου:")
     
-    postponed_
+    postponed_addresses = []
+    active_stops = []
+    
+    for i, stop in enumerate(stops_data):
+        is_absent = st.checkbox(f"❌ Λείπει / Κλειστά: {stop['name']} ({stop['address']})", key=f"absent_{i}")
+        if is_absent:
+            postponed_addresses.append(stop)
+        else:
+            active_stops.append(stop)
+
+    ordered_stops = []
+    current_coords = start_coords
+    current_time = 8 * 60
+    
+    unvisited = active_stops.copy()
+    
+    if unvisited or postponed_addresses:
+        with st.spinner("Υπολογισμός βέλτιστου δρομολογίου μέσω οδικού δικτύου..."):
+            while unvisited:
+                best_next = None
+                best_score = float('inf')
+                best_travel_time = 0
+                
+                for stop in unvisited:
+                    travel_time_mins, actual_dist = get_route_data_ors(current_coords, stop['coords'])
+                    arrival_time = current_time + travel_time_mins
+                    
+                    if arrival_time > stop['end_time']:
+                        time_penalty = (arrival_time - stop['end_time']) * 10
+                    elif arrival_time < stop['start_time']:
+                        time_penalty = stop['start_time'] - arrival_time
+                    else:
+                        time_penalty = 0
+                    
+                    score = actual_dist + (time_penalty * 0.1)
+                    if score < best_score:
+                        best_score = score
+                        best_next = stop
+                        best_travel_time = travel_time_mins
+                    time.sleep(0.05)
+                
+                if best_next:
+                    arrival_time = current_time + best_travel_time
+                    current_time = max(arrival_time, best_next['start_time']) + 10
+                    ordered_stops.append(best_next['address'])
+                    current_coords = best_next['coords']
+                    unvisited.remove(best_next)
+
+            unvisited_postponed = postponed_addresses.copy()
+            while unvisited_postponed:
+                best_next = None
+                best_score = float('inf')
+                
+                for stop in unvisited_postponed:
+                    _, actual_dist = get_route_data_ors(current_coords, stop['coords'])
+                    score = actual_dist
+                    if score < best_score:
+                        best_score = score
+                        best_next = stop
+                    time.sleep(0.05)
+                        
+                if best_next:
+                    ordered_stops.append(best_next['address'])
+                    current_coords = best_next['coords']
+                    unvisited_postponed.remove(best_next)
+
+    if ordered_stops:
+        st.markdown("---")
+        st.success("Το δρομολόγιο ενημερώθηκε με βάση τους πραγματικούς δρόμους!")
         
+        max_waypoints = 8
+        chunks = [ordered_stops[i:i + max_waypoints] for i in range(0, len(ordered_stops), max_waypoints)]
+        
+        current_start = START_ADDRESS
+        for idx, chunk in enumerate(chunks):
+            current_destination = START_ADDRESS if idx == len(chunks) - 1 else chunk[-1]
+            waypoints = chunk[:-1] if idx < len(chunks) - 1 else chunk
+            
+            base_url = "https://www.google.com/maps/dir/"
+            query_stops = [current_start] + waypoints + [current_destination]
+            encoded_stops = [urllib.parse.quote(stop) for stop in query_stops]
+            maps_url = base_url + "/".join(encoded_stops)
+            
+            st.markdown(f"### 📍 Μέρος {idx + 1}")
+            st.info(f"🔗 [📲 Άνοιγμα Μέρους {idx + 1} στο Google Maps]({maps_url})")
+            current_start = current_destination
+            
