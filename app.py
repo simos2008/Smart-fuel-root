@@ -3,49 +3,48 @@ import pandas as pd
 import urllib.parse
 import io
 
-st.set_page_config(page_title="Οργανωτής Δρομολογίων v15.0", layout="wide")
-st.title("🚗 Smart Fuel Router v15.0")
+st.set_page_config(page_title="Smart Fuel Router", layout="wide")
+st.title("🚗 Smart Fuel Router - Τελική Έκδοση")
 
 if 'final_data' not in st.session_state: st.session_state.final_data = []
 
 # --- 1. ΕΙΣΑΓΩΓΗ ---
-tab1, tab2 = st.tabs(["📂 Από Excel", "✍️ Χειροκίνητη Εισαγωγή"])
-with tab1:
-    uploaded_file = st.file_uploader("Ανέβασε Excel", type=["xlsx"])
-    if uploaded_file:
-        df = pd.read_excel(uploaded_file)
-        st.session_state.final_data = df.to_dict('records')
-        st.success(f"Φορτώθηκαν {len(df)} στάσεις.")
-with tab2:
-    n, a, c, t, h = st.text_input("Όνομα"), st.text_input("Διεύθυνση"), st.text_input("Περιοχή"), st.text_input("Τηλέφωνο"), st.text_input("Ώρα")
+uploaded_file = st.file_uploader("Ανέβασε το αρχείο σου", type=["xlsx", "csv"])
+if uploaded_file:
+    df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
+    st.session_state.final_data = df.to_dict('records')
+
+# Χειροκίνητη εισαγωγή (για να ενσωματώνεται στη λίστα)
+with st.expander("➕ Προσθήκη Χειροκίνητης Στάσης"):
+    n, a, p, t, h = st.text_input("Όνομα"), st.text_input("Διεύθυνση"), st.text_input("Περιοχή"), st.text_input("Τηλέφωνο"), st.text_input("Επιθυμητή ώρα")
     if st.button("Προσθήκη"):
-        st.session_state.final_data.append({"Όνομα": n, "Διεύθυνση": a, "Περιοχή": c, "Τηλέφωνο": t, "Ώρα Παράδοσης": h})
+        st.session_state.final_data.append({"όνομα": n, "Διεύθυνση": a, "περιοχή": p, "τηλέφωνο": t, "επιθυμητή ώρα": h})
         st.rerun()
 
-# --- 2. ΠΡΟΕΠΙΣΚΟΠΗΣΗ & ΤΕΜΑΧΙΣΜΟΣ ---
+# --- 2. ΕΠΕΞΕΡΓΑΣΙΑ & ΔΙΑΧΩΡΙΣΜΟΣ ---
 if st.session_state.final_data:
     df_all = pd.DataFrame(st.session_state.final_data)
-    st.subheader("📋 Συνολική Λίστα Στάσεων")
+    st.write("### 📋 Συνολική Λίστα (", len(df_all), "στάσεις)")
     st.dataframe(df_all)
 
-    # Ορίζουμε πόσες στάσεις θέλεις ανά διαδρομή (π.χ. 8 στάσεις ανά μέρος)
-    CHUNK_SIZE = 8
+    # Διαχωρισμός ανά 7 στάσεις
+    CHUNK = 7
+    st.subheader("🔗 Δρομολόγια για Google Maps")
     
-    if st.button("🚀 Δημιουργία Μερών για Google Maps"):
-        # Τεμαχισμός της λίστας
-        chunks = [df_all[i:i + CHUNK_SIZE] for i in range(0, len(df_all), CHUNK_SIZE)]
+    for i in range(0, len(df_all), CHUNK):
+        part = df_all.iloc[i:i+CHUNK]
+        # Χρησιμοποιούμε τη στήλη 'Διεύθυνση' που υπάρχει στο αρχείο σου
+        addresses = [str(x) for x in part['Διεύθυνση'].tolist()]
         
-        st.subheader("🔗 Links για Google Maps")
-        for idx, chunk in enumerate(chunks):
-            # Φτιάχνουμε το link για κάθε "μέρος"
-            addresses = "/".join(chunk['Διεύθυνση'].astype(str))
-            url = f"https://www.google.com/maps/dir/?api=1&destination={urllib.parse.quote(chunk['Διεύθυνση'].iloc[-1])}&waypoints={urllib.parse.quote(addresses)}&travelmode=driving"
-            st.markdown(f"**Μέρος {idx + 1} ({len(chunk)} στάσεις):** [📲 Άνοιγμα στο Maps]({url})")
+        # Κατασκευή URL
+        start = "Ευριπίδου 36, Καλλιθέα"
+        url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(start)}&destination={urllib.parse.quote(addresses[-1])}&waypoints={urllib.parse.quote('|'.join(addresses[:-1]))}&travelmode=driving"
+        
+        st.markdown(f"**Μέρος {i//CHUNK + 1}:** [📲 Άνοιγμα στο Maps]({url})")
 
     # --- 3. ΕΞΑΓΩΓΗ ---
-    if st.button("💾 Εξαγωγή Όλων σε Excel"):
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_all.to_excel(writer, index=False)
-        st.download_button("📥 Κατέβασμα", data=buffer.getvalue(), file_name="Πληρες_Δρομολογιο.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_all.to_excel(writer, index=False)
+    st.download_button("💾 Κατέβασμα Ολοκληρωμένου Excel", buffer.getvalue(), "Δρομολογιο.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    
