@@ -7,7 +7,7 @@ import openrouteservice
 import time
 import re
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο (Fast v2.2)", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο (Fast v2.3)", page_icon="🚗", layout="centered")
 
 # --- 🔑 OPENROUTESERVICE CONFIGURATION ---
 ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImIwNGFkYjBlMDFlZTQxMmFiYjc4ODg1OTExNTEzMTc5IiwiaCI6Im11cm11cjY0In0="
@@ -45,7 +45,7 @@ if not st.session_state.splash_screen_shown:
     st.session_state.splash_screen_shown = True
     st.rerun()
 
-st.title("🚗 Smart Fuel Router v2.2")
+st.title("🚗 Smart Fuel Router v2.3")
 st.write("Υπολογισμός σειράς με βάση τα ωράρια, 20 λεπτά αναμονή ανά παράδοση και τελικά στατιστικά από πραγματικούς δρόμους.")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
@@ -93,7 +93,7 @@ def get_final_route_details_ors(waypoints_coords):
         duration_mins = routes['features'][0]['properties']['summary']['duration'] / 60
         distance_km = routes['features'][0]['properties']['summary']['distance'] / 1000
         return duration_mins, distance_km
-    except:
+    except Exception as e:
         return None, None
 
 # --- ΦΟΡΤΩΣΗ EXCEL & ΧΕΙΡΟΚΙΝΗΤΑ ---
@@ -132,6 +132,5 @@ if uploaded_file is not None:
         c_name_idx = next((i for i, c in enumerate(clean_columns) if "ονομα" in c or "name" in c), 0)
         c_time_idx = next((i for i, c in enumerate(clean_columns) if "ωρα" in c or "time" in c), None)
         
-        actual_addr_col, actual_reg_col, actual_name_col = df.columns[c_addr_idx], df.columns[c_reg_idx], df.columns[c_name_idx]
-        actual_time_col = df.columns
-        
+        actual_addr_col, actual_reg_col, actual_name_col = df.columns[c_addr_idx], df.columns
+    
