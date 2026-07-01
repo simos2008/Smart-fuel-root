@@ -7,7 +7,7 @@ import requests
 import time
 import re
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο v3.5", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο v3.6", page_icon="🚗", layout="centered")
 
 # --- 🌟 SPLASH SCREEN ---
 if 'splash_screen_shown' not in st.session_state:
@@ -38,8 +38,8 @@ if not st.session_state.splash_screen_shown:
     st.session_state.splash_screen_shown = True
     st.rerun()
 
-st.title("🚗 Smart Fuel Router v3.5")
-st.write("Υπολογισμός σειράς με βάση τα ωράρια, 20 λεπτά αναμονή ανά παράδοση και τελικά στατιστικά μέσω OSRM (Χωρίς API Keys).")
+st.title("🚗 Smart Fuel Router v3.6")
+st.write("Υπολογισμός σειράς με βάση τα ωράρια, 20 λεπτά αναμονή ανά παράδοση και τελικά στατιστικά μέσω OSRM.")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
 AVERAGE_SPEED_KMH = 30
@@ -69,28 +69,35 @@ def time_to_minutes(time_str):
 @st.cache_data(show_spinner=False)
 def get_coordinates(address):
     try:
-        geolocator = Nominatim(user_agent="fuel_router_v35_2026")
+        geolocator = Nominatim(user_agent="fuel_router_v36_2026")
         location = geolocator.geocode(address + ", Ελλάδα", timeout=10)
         if location: return (location.latitude, location.longitude)
     except: return None
     return None
 
-def get_final_route_details_osrm(waypoints_coords):
-    try:
-        # Το OSRM δέχεται τις συντεταγμένες σε μορφή longitude,latitude χωρισμένες με ερωτηματικό
-        coords_string = ";".join([f"{c[1]},{c[0]}" for c in waypoints_coords])
-        url = f"http://router.project-osrm.org/route/v1/driving/{coords_string}?overview=false"
-        
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        
-        if data.get("code") == "Ok":
-            duration_mins = data["routes"][0]["duration"] / 60
-            distance_km = data["routes"][0]["distance"] / 1000
-            return duration_mins, distance_km
-    except:
-        return None, None
-    return None, None
+# ΝΕΑ ΣΥΝΑΡΤΗΣΗ: Υπολογίζει τη διαδρομή ανά ζευγάρια σημείων για να μην μπλοκάρει ποτέ
+def get_final_route_details_osrm_segmented(waypoints_coords):
+    total_duration_mins = 0.0
+    total_distance_km = 0.0
+    
+    for i in range(len(waypoints_coords) - 1):
+        p1 = waypoints_coords[i]
+        p2 = waypoints_coords[i+1]
+        try:
+            url = f"http://router.project-osrm.org/route/v1/driving/{p1[1]},{p1[0]};{p2[1]},{p2[0]}?overview=false"
+            response = requests.get(url, timeout=5)
+            data = response.json()
+            if data.get("code") == "Ok":
+                total_duration_mins += data["routes"][0]["duration"] / 60
+                total_distance_km += data["routes"][0]["distance"] / 1000
+            time.sleep(0.05) # Μικρή καθυστέρηση για ασφάλεια
+        except:
+            # Αν αποτύχει το OSRM για ένα κομμάτι, υπολογίζει γεωδαισιακά σαν εναλλακτική
+            dist = geodesic(p1, p2).kilometers * 1.3
+            total_distance_km += dist
+            total_duration_mins += (dist / AVERAGE_SPEED_KMH) * 60
+            
+    return total_duration_mins, total_distance_km
 
 # --- ΦΟΡΤΩΣΗ EXCEL & ΧΕΙΡΟΚΙΝΗΤΑ ---
 uploaded_file = st.file_uploader("Ανεβάστε το αρχείο Excel (.xlsx)", type=["xlsx"])
@@ -218,10 +225,10 @@ if stops_base_list:
         st.markdown("---")
         st.success("Το δρομολόγιο υπολογίστηκε επιτυχώς!")
         
-        with st.spinner("Λήψη πραγματικών δεδομένων οδικού δικτύου μέσω OSRM..."):
-            driving_mins, driving_km = get_final_route_details_osrm(ordered_coords)
+        with st.spinner("Υπολογισμός πραγματικών στατιστικών οδικού δικτύου..."):
+            driving_mins, driving_km = get_final_route_details_osrm_segmented(ordered_coords)
         
-        if driving_mins and driving_km:
+        if driving_km > 0:
             total_time_mins = driving_mins + (len(active_stops) * DELIVERY_DURATION_MINS)
             hours, minutes = divmod(int(total_time_mins), 60)
             
@@ -249,4 +256,5 @@ if stops_base_list:
             st.markdown(f"### 📍 Μέρος {idx + 1}")
             st.info(f"🔗 [📲 Άνοιγμα Μέρους {idx + 1} στο Google Maps]({maps_url})")
             current_start = current_destination
+        
             
