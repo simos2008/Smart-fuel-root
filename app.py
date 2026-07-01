@@ -130,4 +130,31 @@ if st.session_state.final_stops:
             st.markdown("---")
             
         st.info(f"📊 **Σύνολα:** {total_dist} χλμ | {total_time} λεπτά καθαρής οδήγησης | {len(st.session_state.final_stops)} στάσεις")
+            # 3. Εξαγωγή σε Excel
+    st.subheader("3️⃣ Εξαγωγή Δρομολογίου")
+    
+    if st.button("💾 Κατέβασμα Δρομολογίου σε Excel"):
+        # Δημιουργία λίστας με τα τελικά δεδομένα
+        export_data = []
+        for i, s in enumerate(st.session_state.final_stops):
+            export_data.append({
+                "Σειρά": i + 1,
+                "Όνομα": s['name'],
+                "Διεύθυνση": s['address']
+            })
+            
+        df_export = pd.DataFrame(export_data)
+        
+        # Μετατροπή σε Excel (Byte stream)
+        import io
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            df_export.to_excel(writer, index=False, sheet_name='Δρομολόγιο')
+        
+        st.download_button(
+            label="📥 Πατήστε εδώ για λήψη του αρχείου",
+            data=buffer.getvalue(),
+            file_name="Βελτιστοποιημενο_Δρομολογιο.xlsx",
+            mime="application/vnd.ms-excel"
+        )
         
