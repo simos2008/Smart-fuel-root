@@ -3,18 +3,11 @@ import pandas as pd
 import urllib.parse
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
-import openrouteservice
+import requests
 import time
 import re
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο v2.4", page_icon="🚗", layout="centered")
-
-# --- 🔑 OPENROUTESERVICE CONFIGURATION ---
-ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImIwNGFkYjBlMDFlZTQxMmFiYjc4ODg1OTExNTEzMTc5IiwiaCI6Im11cm11cjY0In0="
-try:
-    ors_client = openrouteservice.Client(key=ORS_API_KEY)
-except Exception as e:
-    st.error(f"Σφάλμα αρχικοποίησης OpenRouteService: {e}")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο v3.5", page_icon="🚗", layout="centered")
 
 # --- 🌟 SPLASH SCREEN ---
 if 'splash_screen_shown' not in st.session_state:
@@ -45,8 +38,8 @@ if not st.session_state.splash_screen_shown:
     st.session_state.splash_screen_shown = True
     st.rerun()
 
-st.title("🚗 Smart Fuel Router v2.4")
-st.write("Γρήγορος υπολογισμός σειράς, 20 λεπτά αναμονή ανά παράδοση και τελικά στατιστικά από πραγματικούς δρόμους.")
+st.title("🚗 Smart Fuel Router v3.5")
+st.write("Υπολογισμός σειράς με βάση τα ωράρια, 20 λεπτά αναμονή ανά παράδοση και τελικά στατιστικά μέσω OSRM (Χωρίς API Keys).")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
 AVERAGE_SPEED_KMH = 30
@@ -76,25 +69,28 @@ def time_to_minutes(time_str):
 @st.cache_data(show_spinner=False)
 def get_coordinates(address):
     try:
-        geolocator = Nominatim(user_agent="fuel_router_v8_2026")
+        geolocator = Nominatim(user_agent="fuel_router_v35_2026")
         location = geolocator.geocode(address + ", Ελλάδα", timeout=10)
         if location: return (location.latitude, location.longitude)
     except: return None
     return None
 
-def get_final_route_details_ors(waypoints_coords):
+def get_final_route_details_osrm(waypoints_coords):
     try:
-        formatted_coords = [[c[1], c[0]] for c in waypoints_coords]
-        routes = ors_client.directions(
-            coordinates=formatted_coords,
-            profile='driving-car',
-            format='geojson'
-        )
-        duration_mins = routes['features'][0]['properties']['summary']['duration'] / 60
-        distance_km = routes['features'][0]['properties']['summary']['distance'] / 1000
-        return duration_mins, distance_km
-    except Exception as e:
+        # Το OSRM δέχεται τις συντεταγμένες σε μορφή longitude,latitude χωρισμένες με ερωτηματικό
+        coords_string = ";".join([f"{c[1]},{c[0]}" for c in waypoints_coords])
+        url = f"http://router.project-osrm.org/route/v1/driving/{coords_string}?overview=false"
+        
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        if data.get("code") == "Ok":
+            duration_mins = data["routes"][0]["duration"] / 60
+            distance_km = data["routes"][0]["distance"] / 1000
+            return duration_mins, distance_km
+    except:
         return None, None
+    return None, None
 
 # --- ΦΟΡΤΩΣΗ EXCEL & ΧΕΙΡΟΚΙΝΗΤΑ ---
 uploaded_file = st.file_uploader("Ανεβάστε το αρχείο Excel (.xlsx)", type=["xlsx"])
@@ -222,8 +218,8 @@ if stops_base_list:
         st.markdown("---")
         st.success("Το δρομολόγιο υπολογίστηκε επιτυχώς!")
         
-        with st.spinner("Λήψη πραγματικών δεδομένων οδικού δικτύου..."):
-            driving_mins, driving_km = get_final_route_details_ors(ordered_coords)
+        with st.spinner("Λήψη πραγματικών δεδομένων οδικού δικτύου μέσω OSRM..."):
+            driving_mins, driving_km = get_final_route_details_osrm(ordered_coords)
         
         if driving_mins and driving_km:
             total_time_mins = driving_mins + (len(active_stops) * DELIVERY_DURATION_MINS)
@@ -253,4 +249,4 @@ if stops_base_list:
             st.markdown(f"### 📍 Μέρος {idx + 1}")
             st.info(f"🔗 [📲 Άνοιγμα Μέρους {idx + 1} στο Google Maps]({maps_url})")
             current_start = current_destination
-        
+            
