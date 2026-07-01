@@ -7,7 +7,7 @@ import openrouteservice
 import time
 import re
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο (Fast v2.1)", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο (Fast v2.2)", page_icon="🚗", layout="centered")
 
 # --- 🔑 OPENROUTESERVICE CONFIGURATION ---
 ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImIwNGFkYjBlMDFlZTQxMmFiYjc4ODg1OTExNTEzMTc5IiwiaCI6Im11cm11cjY0In0="
@@ -45,12 +45,12 @@ if not st.session_state.splash_screen_shown:
     st.session_state.splash_screen_shown = True
     st.rerun()
 
-st.title("🚗 Smart Fuel Router v2.1")
+st.title("🚗 Smart Fuel Router v2.2")
 st.write("Υπολογισμός σειράς με βάση τα ωράρια, 20 λεπτά αναμονή ανά παράδοση και τελικά στατιστικά από πραγματικούς δρόμους.")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
 AVERAGE_SPEED_KMH = 30
-DELIVERY_DURATION_MINS = 20 # 20 λεπτά στάση σε κάθε delivery
+DELIVERY_DURATION_MINS = 20 
 
 if 'manual_stops' not in st.session_state:
     st.session_state.manual_stops = []
@@ -82,7 +82,6 @@ def get_coordinates(address):
     except: return None
     return None
 
-# Συνάρτηση που φέρνει τα τελικά στατιστικά για όλο το δρομολόγιο μαζικά
 def get_final_route_details_ors(waypoints_coords):
     try:
         formatted_coords = [[c[1], c[0]] for c in waypoints_coords]
@@ -134,87 +133,5 @@ if uploaded_file is not None:
         c_time_idx = next((i for i, c in enumerate(clean_columns) if "ωρα" in c or "time" in c), None)
         
         actual_addr_col, actual_reg_col, actual_name_col = df.columns[c_addr_idx], df.columns[c_reg_idx], df.columns[c_name_idx]
-        actual_time_col = df.columns[c_time_idx] if c_time_idx is not None else None
-        df = df.dropna(subset=[actual_addr_col])
+        actual_time_col = df.columns
         
-        for idx, row in df.iterrows():
-            stops_base_list.append({'name': str(row[actual_name_col]), 'address': str(row[actual_addr_col]), 'region': str(row[actual_reg_col]), 'time_window': str(row[actual_time_col]) if actual_time_col else None})
-    except Exception as e: st.error(f"Σφάλμα Excel: {e}")
-
-for m_stop in st.session_state.manual_stops: stops_base_list.append(m_stop)
-
-if stops_base_list:
-    with st.spinner("Υπολογισμός συντεταγμένων..."):
-        stops_data = []
-        start_coords = get_coordinates(START_ADDRESS)
-        for stop in stops_base_list:
-            full_addr = f"{stop['address']}, {stop['region']}"
-            coords = get_coordinates(full_addr) or get_coordinates(stop['region'])
-            start_m, end_m = time_to_minutes(stop['time_window'])
-            if coords:
-                stops_data.append({'address': full_addr, 'coords': coords, 'name': stop['name'], 'start_time': start_m, 'end_time': end_m})
-            time.sleep(0.1)
-
-    st.subheader("📋 Διαχείριση Παραδόσεων & Απουσιών")
-    postponed_addresses, active_stops = [], []
-    for i, stop in enumerate(stops_data):
-        if st.checkbox(f"❌ Λείπει: {stop['name']} ({stop['address']})", key=f"absent_{i}"): postponed_addresses.append(stop)
-        else: active_stops.append(stop)
-
-    ordered_stops, ordered_coords = [], [start_coords]
-    current_coords, current_time = start_coords, 8 * 60
-    
-    unvisited = active_stops.copy()
-    
-    # ΥΠΟΛΟΓΙΣΜΟΣ ΣΕΙΡΑΣ
-    while unvisited:
-        best_next, best_score, best_travel_time = None, float('inf'), 0
-        for stop in unvisited:
-            dist = geodesic(current_coords, stop['coords']).kilometers
-            travel_time_mins = (dist / AVERAGE_SPEED_KMH) * 60
-            arrival_time = current_time + travel_time_mins
-            time_penalty = (arrival_time - stop['end_time']) * 10 if arrival_time > stop['end_time'] else (stop['start_time'] - arrival_time if arrival_time < stop['start_time'] else 0)
-            score = dist + (time_penalty * 0.1)
-            if score < best_score:
-                best_score, best_next, best_travel_time = score, stop, travel_time_mins
-        
-        if best_next:
-            # Η επόμενη τρέχουσα ώρα είναι: η ώρα άφιξης (ή έναρξης ωραρίου) + 20 λεπτά για την παράδοση
-            current_time = max(current_time + best_travel_time, best_next['start_time']) + DELIVERY_DURATION_MINS
-            ordered_stops.append(best_next['address'])
-            ordered_coords.append(best_next['coords'])
-            current_coords = best_next['coords']
-            unvisited.remove(best_next)
-
-    unvisited_postponed = postponed_addresses.copy()
-    while unvisited_postponed:
-        best_next, best_score = None, float('inf')
-        for stop in unvisited_postponed:
-            dist = geodesic(current_coords, stop['coords']).kilometers
-            if dist < best_score: best_score, best_next = dist, stop
-        if best_next:
-            ordered_stops.append(best_next['address'])
-            ordered_coords.append(best_next['coords'])
-            current_coords = best_next['coords']
-            unvisited_postponed.remove(best_next)
-
-    if ordered_stops:
-        ordered_coords.append(start_coords) # Επιστροφή στην αφετηρία για το τελικό API
-        
-        st.markdown("---")
-        st.success("Το δρομολόγιο υπολογίστηκε επιτυχώς!")
-        
-        # Κλήση στο OpenRouteService ΜΟΝΟ μια φορά στο τέλος για ακριβή στατιστικά
-        with st.spinner("Λήψη πραγματικών δεδομένων οδικού δικτύου..."):
-            driving_mins, driving_km = get_final_route_details_ors(ordered_coords)
-        
-        if driving_mins and driving_km:
-            total_time_mins = driving_mins + (len(active_stops) * DELIVERY_DURATION_MINS)
-            hours, minutes = divmod(int(total_time_mins), 60)
-            
-            st.markdown("### 📊 Στατιστικά Δρομολογίου (Πραγματικοί Δρόμοι)")
-            col_a, col_b = st.columns(2)
-            col_a.metric("Συνολική Απόσταση", f"{driving_km:.1f} χλμ")
-            col_b.metric("Συνολικός Χρόνος", f"{hours}ώ {minutes}λ (μαζί με τις στάσεις)")
-            st.caption(f"Περιλαμβάνει {
-            
