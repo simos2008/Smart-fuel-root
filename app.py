@@ -6,7 +6,7 @@ from geopy.distance import geodesic
 import time
 import re
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο v8.5", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο v9.0", page_icon="🚗", layout="centered")
 
 # --- 🌟 SPLASH SCREEN ---
 if 'splash_screen_shown' not in st.session_state:
@@ -37,7 +37,7 @@ if not st.session_state.splash_screen_shown:
     st.session_state.splash_screen_shown = True
     st.rerun()
 
-st.title("🚗 Smart Fuel Router v8.5")
+st.title("🚗 Smart Fuel Router v9.0")
 st.write("Έξυπνη σειρά, παραγωγή Links για Google Maps και Import για τελικά στατιστικά βενζίνης.")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
@@ -67,7 +67,7 @@ def time_to_minutes(time_str):
 @st.cache_data(show_spinner=False)
 def get_coordinates(address):
     try:
-        geolocator = Nominatim(user_agent="fuel_router_v85_2026")
+        geolocator = Nominatim(user_agent="fuel_router_v90_2026")
         location = geolocator.geocode(address + ", Ελλάδα", timeout=10)
         if location: return (location.latitude, location.longitude)
     except: return None
@@ -147,5 +147,103 @@ if stops_base_list:
     
     unvisited = active_stops.copy()
     
-    # ΥΠΟΛΟΓ
+    # ΥΠΟΛΟΓΙΣΜΟΣ ΣΕΙΡΑΣ ΜΕ ΒΑΣΗ ΤΑ ΠΡΑΓΜΑΤΙΚΑ ΔΕΔΟΜΕΝΑ ΣΟΥ
+    AVERAGE_SPEED_KMH = 30
+    while unvisited:
+        best_next = None
+        best_score = float('inf')
+        best_travel_time = 0
+        
+        for stop in unvisited:
+            dist = geodesic(current_coords, stop['coords']).kilometers
+            travel_time_mins = (dist / AVERAGE_SPEED_KMH) * 60
+            arrival_time = current_time + travel_time_mins
+            
+            time_penalty = 0
+            if arrival_time > stop['end_time']:
+                time_penalty = (arrival_time - stop['end_time']) * 10
+            elif arrival_time < stop['start_time']:
+                time_penalty = (stop['start_time'] - arrival_time)
+                
+            score = dist + (time_penalty * 0.1)
+            if score < best_score:
+                best_score = score
+                best_next = stop
+                best_travel_time = travel_time_mins
+        
+        if best_next:
+            current_time = max(current_time + best_travel_time, best_next['start_time']) + DELIVERY_DURATION_MINS
+            ordered_stops.append(best_next['address'])
+            current_coords = best_next['coords']
+            unvisited.remove(best_next)
+
+    unvisited_postponed = postponed_addresses.copy()
+    while unvisited_postponed:
+        best_next = None
+        best_score = float('inf')
+        for stop in unvisited_postponed:
+            dist = geodesic(current_coords, stop['coords']).kilometers
+            if dist < best_score: 
+                best_score = dist
+                best_next = stop
+        if best_next:
+            ordered_stops.append(best_next['address'])
+            current_coords = best_next['coords']
+            unvisited_postponed.remove(best_next)
+
+    # ΕΜΦΑΝΙΣΗ ΑΠΟΤΕΛΕΣΜΑΤΩΝ ΚΑΙ LINKS GOOGLE MAPS
+    if ordered_stops:
+        st.markdown("---")
+        st.success("🎯 Το δρομολόγιο οργανώθηκε επιτυχώς!")
+        st.write("### 1️⃣ ΒΗΜΑ: Άνοιξε τα Links στο Google Maps")
+        st.write("Πατήστε τα παρακάτω Links για να δείτε τη σωστή διαδρομή. Μέσα από το Google Maps, κάντε αντιγραφή (copy) το τελικό Link της διεύθυνσης.")
+        
+        max_waypoints = 8
+        chunks = [ordered_stops[i:i + max_waypoints] for i in range(0, len(ordered_stops), max_waypoints)]
+        current_start = START_ADDRESS
+        
+        for idx, chunk in enumerate(chunks):
+            current_destination = START_ADDRESS if idx == len(chunks) - 1 else chunk[-1]
+            waypoints = chunk[:-1] if idx < len(chunks) - 1 else chunk
+            
+            base_url = "https://www.google.com/maps/dir/"
+            query_stops = [current_start] + waypoints + [current_destination]
+            encoded_stops = [urllib.parse.quote(stop) for stop in query_stops]
+            maps_url = base_url + "/".join(encoded_stops)
+            
+            st.markdown(f"#### 📍 Μέρος {idx + 1}")
+            st.info(f"🔗 [📲 Άνοιγμα Μέρους {idx + 1} στο Google Maps]({maps_url})")
+            current_start = current_destination
+
+        st.markdown("---")
+        st.write("### 2️⃣ ΒΗΜΑ: Επικόλληση των Links για Τελικά Στατιστικά")
+        st.write("Κάντε paste εδώ τα Links που αντιγράψατε από το Google Maps (αφού φορτώσουν οι αποστάσεις) για να βγει η τελική αναφορά χρόνου στάσεων.")
+        
+        import_link_1 = st.text_input("🔗 Επικόλληση ολόκληρου του Link για το Μέρος 1:")
+        import_link_2 = st.text_input("🔗 Επικόλληση ολόκληρου του Link για το Μέρος 2 (Αν υπάρχει):")
+        
+        if st.button("📊 Υπολογισμός Αναφοράς Βενζίνης & Στάσεων"):
+            links_to_process = [l for l in [import_link_1, import_link_2] if l]
+            if not links_to_process:
+                st.error("Παρακαλώ επικολλήστε τουλάχιστον ένα Link από αυτά που ανοίξατε!")
+            else:
+                for idx, link in enumerate(links_to_process):
+                    try:
+                        decoded_url = urllib.parse.unquote(link)
+                        stops_in_link = [s for s in decoded_url.split("/") if s.strip()]
+                        
+                        actual_deliveries = 0
+                        for s in stops_in_link:
+                            if "http" not in s and "Ευριπίδου" not in s and "Καλλιθέα" not in s:
+                                actual_deliveries += 1
+                                
+                        total_waiting_mins = actual_deliveries * DELIVERY_DURATION_MINS
+                        
+                        st.markdown(f"#### 📊 Απολογισμός Μέρους {idx + 1}")
+                        st.write(f"📦 **Ενεργές Παραδόσεις στο Link:** {actual_deliveries} στάσεις")
+                        st.write(f"⏳ **Συνολικός Χρόνος Αναμονής:** {total_waiting_mins} λεπτά ({total_waiting_mins/60:.1f} ώρες)")
+                        st.caption("💡 Δείτε τα χιλιόμετρα και τον χρόνο οδήγησης απευθείας στην καρτέλα του Google Maps και προσθέστε τον παραπάνω χρόνο αναμονής για το τελικό αποτέλεσμα.")
+                    except:
+                        st.error(f"Δεν ήταν δυνατή η ανάλυση του Link για το Μέρος {idx + 1}. Βεβαιωθείτε ότι αντιγράψατε σωστά όλη τη διεύθυνση.")
+                
     
