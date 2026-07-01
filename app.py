@@ -1,277 +1,61 @@
 import streamlit as st
 import pandas as pd
 import urllib.parse
-from geopy.geocoders import Nominatim
-from geopy.distance import geodesic
 import time
-import re
-import requests
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο v9.5", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο v15.0", page_icon="🚗", layout="centered")
 
-# --- 🌟 SPLASH SCREEN ---
-if 'splash_screen_shown' not in st.session_state:
-    st.session_state.splash_screen_shown = False
+st.title("🚗 Smart Fuel Router v15.0")
+DELIVERY_DURATION_MINS = 20
 
-if not st.session_state.splash_screen_shown:
-    st.markdown("""
-        <style>
-        #splash-container {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background-color: #111111; display: flex; flex-direction: column;
-            justify-content: center; align-items: center; z-index: 999999; color: white;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .splash-logo { font-size: 80px; animation: bounce 1.5s infinite; }
-        .splash-title { font-size: 32px; font-weight: bold; margin-top: 20px; letter-spacing: 2px; }
-        .spinner { margin-top: 30px; width: 40px; height: 40px; border: 4px solid rgba(255,255,255,0.1); border-radius: 50%; border-top-color: #ff4b4b; animation: spin 1s ease-in-out infinite; }
-        @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-20px); } }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        </style>
-        <div id="splash-container">
-            <div class="splash-logo">🚗</div>
-            <div class="splash-title">SMART FUEL ROUTER</div>
-            <div class="spinner"></div>
-        </div>
-    """, unsafe_allow_html=True)
-    time.sleep(2.5)
-    st.session_state.splash_screen_shown = True
-    st.rerun()
+# --- ΔΙΑΧΕΙΡΙΣΗ ΣΤΑΣΕΩΝ ---
+if 'stops' not in st.session_state:
+    st.session_state.stops = []
 
-st.title("🚗 Smart Fuel Router v9.5")
-st.write("Αυτόματη ανάλυση σύντομων Links (maps.app.goo.gl) για ακριβή καταμέτρηση στάσεων.")
+st.subheader("1️⃣ Επιλογή: Εισαγωγή Στάσεων")
+tab1, tab2 = st.tabs(["📂 Από Excel", "✍️ Χειροκίνητα"])
 
-START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
-DELIVERY_DURATION_MINS = 10
-
-if 'manual_stops' not in st.session_state:
-    st.session_state.manual_stops = []
-
-def strip_accents_and_lowercase(s):
-    if not isinstance(s, str): return str(s)
-    s = s.lower().strip()
-    replacements = {'ά':'α','έ':'ε','ή':'η','ί':'ι','ό':'ο','ύ':'υ','ώ':'ω','ϊ':'ι','ϋ':'υ','ΐ':'ι','ΰ':'υ'}
-    for acc, raw in replacements.items(): s = s.replace(acc, raw)
-    return s
-
-def time_to_minutes(time_str):
-    if pd.isna(time_str) or str(time_str).strip() == "" or str(time_str).upper() == "NAN": return 0, 1440
-    time_str = str(time_str).replace(" ", "")
-    match_range = re.findall(r'(\d{1,2}):(\d{2})', time_str)
-    if len(match_range) >= 2:
-        return int(match_range[0][0])*60 + int(match_range[0][1]), int(match_range[1][0])*60 + int(match_range[1][1])
-    elif len(match_range) == 1:
-        ex = int(match_range[0][0])*60 + int(match_range[0][1])
-        return max(0, ex-15), min(1440, ex+15)
-    return 0, 1440
-
-@st.cache_data(show_spinner=False)
-def get_coordinates(address):
-    try:
-        geolocator = Nominatim(user_agent="fuel_router_v95_2026")
-        location = geolocator.geocode(address + ", Ελλάδα", timeout=10)
-        if location: return (location.latitude, location.longitude)
-    except: return None
-    return None
-
-# ΣΥΝΑΡΤΗΣΗ ΠΟΥ ΞΕΤΥΛΙΓΕΙ ΤΑ SHORT LINKS ΤΗΣ GOOGLE
-def expand_and_analyze_link(url):
-    try:
-        # Αν είναι σύντομο link, ακολουθούμε το redirect για να πάρουμε το μεγάλο URL
-        if "maps.app.goo.gl" in url or "goo.gl/maps" in url:
-            response = requests.get(url, allow_redirects=True, timeout=10)
-            final_url = response.url
-        else:
-            final_url = url
-            
-        decoded_url = urllib.parse.unquote(final_url)
-        
-        # 1ος Τρόπος: Έλεγχος αν είναι κλασικό link με διευθύνσεις χωρισμένες με κάθετο
-        stops = [s.strip() for s in decoded_url.split("/") if s.strip() and "http" not in s]
-        
-        # 2ος Τρόπος: Έλεγχος αν είναι link τύπου dir/origin/data (συχνό σε κινητά)
-        if "dir/" in decoded_url:
-            dir_part = decoded_url.split("dir/")[1]
-            stops = [s.split("@")[0].replace("+", " ").strip() for s in dir_part.split("/") if s.strip()]
-            
-        return stops
-    except:
-        return []
-
-# --- ΦΟΡΤΩΣΗ EXCEL & ΧΕΙΡΟΚΙΝΗΤΑ ---
-uploaded_file = st.file_uploader("Ανεβάστε το αρχείο Excel (.xlsx)", type=["xlsx"])
-
-st.markdown("---")
-st.subheader("➕ Χειροκίνητη Προσθήκη Στάσης")
-col1, col2 = st.columns(2)
-with col1:
-    m_name = st.text_input("Όνομα / Κατάστημα")
-    m_addr = st.text_input("Διεύθυνση")
-with col2:
-    m_reg = st.text_input("Περιοχή")
-    m_time = st.text_input("Ωράριο", value="09:00 - 17:00")
-
-if st.button("Προσθήκη Στάσης στη Λίστα"):
-    if m_addr and m_reg:
-        st.session_state.manual_stops.append({'name': m_name if m_name else "Χειροκίνητη Στάση", 'address': m_addr, 'region': m_reg, 'time_window': m_time})
-        st.success(f"Η στάση '{m_addr}' προστέθηκε!")
-    else: st.error("Διεύθυνση και Περιοχή είναι υποχρεωτικά!")
-
-if st.session_state.manual_stops:
-    for i, m_stop in enumerate(st.session_state.manual_stops):
-        st.write(f"{i+1}. {m_stop['name']} - {m_stop['address']}, {m_stop['region']}")
-    if st.button("Καθαρισμός Χειροκίνητων Στάσεων"):
-        st.session_state.manual_stops = []
-        st.rerun()
-
-stops_base_list = []
-if uploaded_file is not None:
-    try:
+with tab1:
+    uploaded_file = st.file_uploader("Ανέβασε το αρχείο Excel", type=["xlsx"])
+    if uploaded_file:
         df = pd.read_excel(uploaded_file, header=1)
-        clean_columns = [strip_accents_and_lowercase(c) for c in df.columns]
-        c_addr_idx = next((i for i, c in enumerate(clean_columns) if "διευθυνση" in c or "address" in c), 1)
-        c_reg_idx = next((i for i, c in enumerate(clean_columns) if "περιοχη" in c or "city" in c), 2)
-        c_name_idx = next((i for i, c in enumerate(clean_columns) if "ονομα" in c or "name" in c), 0)
-        c_time_idx = next((i for i, c in enumerate(clean_columns) if "ωρα" in c or "time" in c), None)
-        
-        actual_addr_col, actual_reg_col, actual_name_col = df.columns[c_addr_idx], df.columns[c_reg_idx], df.columns[c_name_idx]
-        actual_time_col = df.columns[c_time_idx] if c_time_idx is not None else None
-        df = df.dropna(subset=[actual_addr_col])
-        
-        for idx, row in df.iterrows():
-            stops_base_list.append({'name': str(row[actual_name_col]), 'address': str(row[actual_addr_col]), 'region': str(row[actual_reg_col]), 'time_window': str(row[actual_time_col]) if actual_time_col else None})
-    except Exception as e: st.error(f"Σφάλμα Excel: {e}")
+        # Υποθέτουμε ότι οι διευθύνσεις είναι στη στήλη που περιέχει "διευθυνση"
+        st.session_state.stops = df.iloc[:, 1].dropna().tolist()
+        st.success("Οι στάσεις φορτώθηκαν από το Excel!")
 
-for m_stop in st.session_state.manual_stops: stops_base_list.append(m_stop)
-
-if stops_base_list:
-    stops_data = []
-    with st.spinner("Υπολογισμός συντεταγμένων..."):
-        start_coords = get_coordinates(START_ADDRESS)
-        for stop in stops_base_list:
-            full_addr = f"{stop['address']}, {stop['region']}"
-            coords = get_coordinates(full_addr) or get_coordinates(stop['region'])
-            start_m, end_m = time_to_minutes(stop['time_window'])
-            if coords:
-                stops_data.append({'address': full_addr, 'coords': coords, 'name': stop['name'], 'start_time': start_m, 'end_time': end_m})
-            time.sleep(0.1)
-
-    st.subheader("📋 Διαχείριση Παραδόσεων & Απουσιών")
-    postponed_addresses = []
-    active_stops = []
+with tab2:
+    new_address = st.text_input("Πρόσθεσε διεύθυνση (μόνο αυτή είναι υποχρεωτική):")
+    if st.button("➕ Προσθήκη Στάσης"):
+        if new_address:
+            st.session_state.stops.append(new_address)
+        else:
+            st.error("Η διεύθυνση είναι υποχρεωτική!")
     
-    for i, stop in enumerate(stops_data):
-        if st.checkbox(f"❌ Λείπει: {stop['name']} ({stop['address']})", key=f"absent_{i}"): 
-            postponed_addresses.append(stop)
-        else: 
-            active_stops.append(stop)
+    if st.button("🗑️ Καθαρισμός Λίστας"):
+        st.session_state.stops = []
 
-    ordered_stops = []
-    current_coords = start_coords
-    current_time = 8 * 60
+# --- ΕΜΦΑΝΙΣΗ ΛΙΣΤΑΣ ---
+if st.session_state.stops:
+    st.write("### Τρέχουσες Στάσεις:")
+    for i, stop in enumerate(st.session_state.stops):
+        st.write(f"{i+1}. {stop}")
+
+    # --- 2️⃣ ΔΗΜΙΟΥΡΓΙΑ LINK ---
+    st.subheader("2️⃣ Δημιουργία Link για τον Courier")
+    if st.button("🔗 Παραγωγή Link Διαδρομής"):
+        # Logiki gia dimiourgia link (opws tin eixes)
+        base_url = "https://www.google.com/maps/dir/"
+        stops_url = "/".join([urllib.parse.quote(s) for s in st.session_state.stops])
+        final_url = base_url + stops_url
+        st.markdown(f"### [📲 Άνοιγμα Διαδρομής στο Google Maps]({final_url})")
+
+    # --- 3️⃣ ΧΕΙΡΟΚΙΝΗΤΗ ΕΙΣΑΓΩΓΗ ΧΡΟΝΩΝ (ΠΡΟΑΙΡΕΤΙΚΑ) ---
+    st.markdown("---")
+    st.subheader("3️⃣ Αναφορά (Προαιρετικά)")
+    times_input = st.text_input("⏱️ Χρόνοι οδήγησης ανά στάση (π.χ. 10, 5, 20):")
     
-    unvisited = active_stops.copy()
-    
-    AVERAGE_SPEED_KMH = 30
-    while unvisited:
-        best_next = None
-        best_score = float('inf')
-        best_travel_time = 0
+    if st.button("📊 Υπολογισμός Στατιστικών"):
+        times = [int(t.strip()) for t in times_input.split(",")] if times_input else [10] * len(st.session_state.stops)
+        st.info(f"Συνολικός χρόνος οδήγησης: {sum(times)} λεπτά.")
+        st.info(f"Συνολικός χρόνος αναμονής ({len(st.session_state.stops)} στάσεις): {len(st.session_state.stops) * DELIVERY_DURATION_MINS} λεπτά.")
         
-        for stop in unvisited:
-            dist = geodesic(current_coords, stop['coords']).kilometers
-            travel_time_mins = (dist / AVERAGE_SPEED_KMH) * 60
-            arrival_time = current_time + travel_time_mins
-            
-            time_penalty = 0
-            if arrival_time > stop['end_time']:
-                time_penalty = (arrival_time - stop['end_time']) * 10
-            elif arrival_time < stop['start_time']:
-                time_penalty = (stop['start_time'] - arrival_time)
-                
-            score = dist + (time_penalty * 0.1)
-            if score < best_score:
-                best_score = score
-                best_next = stop
-                best_travel_time = travel_time_mins
-        
-        if best_next:
-            current_time = max(current_time + best_travel_time, best_next['start_time']) + DELIVERY_DURATION_MINS
-            ordered_stops.append(best_next['address'])
-            current_coords = best_next['coords']
-            unvisited.remove(best_next)
-
-    unvisited_postponed = postponed_addresses.copy()
-    while unvisited_postponed:
-        best_next = None
-        best_score = float('inf')
-        for stop in unvisited_postponed:
-            dist = geodesic(current_coords, stop['coords']).kilometers
-            if dist < best_score: 
-                best_score = dist
-                best_next = stop
-        if best_next:
-            ordered_stops.append(best_next['address'])
-            current_coords = best_next['coords']
-            unvisited_postponed.remove(best_next)
-
-    if ordered_stops:
-        st.markdown("---")
-        st.success("🎯 Το δρομολόγιο οργανώθηκε επιτυχώς!")
-        st.write("### 1️⃣ ΒΗΜΑ: Άνοιξε τα Links στο Google Maps")
-        
-        max_waypoints = 8
-        chunks = [ordered_stops[i:i + max_waypoints] for i in range(0, len(ordered_stops), max_waypoints)]
-        current_start = START_ADDRESS
-        
-        for idx, chunk in enumerate(chunks):
-            current_destination = START_ADDRESS if idx == len(chunks) - 1 else chunk[-1]
-            waypoints = chunk[:-1] if idx < len(chunks) - 1 else chunk
-            
-            base_url = "https://www.google.com/maps/dir/"
-            query_stops = [current_start] + waypoints + [current_destination]
-            encoded_stops = [urllib.parse.quote(stop) for stop in query_stops]
-            maps_url = base_url + "/".join(encoded_stops)
-            
-            st.markdown(f"#### 📍 Μέρος {idx + 1}")
-            st.info(f"🔗 [📲 Άνοιγμα Μέρους {idx + 1} στο Google Maps]({maps_url})")
-            current_start = current_destination
-
-        st.markdown("---")
-        st.write("### 2️⃣ ΒΗΜΑ: Επικόλληση των Links για Τελικά Στατιστικά")
-        st.write("Κάντε paste τα links κοινοποίησης από το κινητό ή τον browser.")
-        
-        import_link_1 = st.text_input("🔗 Επικόλληση Link για το Μέρος 1:")
-        import_link_2 = st.text_input("🔗 Επικόλληση Link για το Μέρος 2 (Αν υπάρχει):")
-        
-        if st.button("📊 Υπολογισμός Αναφοράς Βενζίνης & Στάσεων"):
-            links_to_process = [l for l in [import_link_1, import_link_2] if l]
-            if not links_to_process:
-                st.error("Παρακαλώ επικολλήστε τουλάχιστον ένα Link!")
-            else:
-                for idx, link in enumerate(links_to_process):
-                    with st.spinner(f"Ανάλυση συνδέσμου Μέρους {idx + 1}..."):
-                        detected_stops = expand_and_analyze_link(link)
-                        
-                        if detected_stops:
-                            actual_deliveries = 0
-                            for s in detected_stops:
-                                s_clean = strip_accents_and_lowercase(s)
-                                # Φιλτράρουμε τις λέξεις κλειδιά που δεν αποτελούν διευθύνσεις πελατών
-                                if not any(x in s_clean for x in ["euripidou", "eyripidou", "kallithea", "καλλιθεα", "ευριπιδου", "am=", "short", "maps"]):
-                                    if len(s.strip()) > 3:
-                                        actual_deliveries += 1
-                            
-                            # Αν λόγω δομής βγει 0, βάζουμε ως ασφάλεια το πλήθος των σημείων μείον την αφετηρία/τερματισμό
-                            if actual_deliveries == 0 and len(detected_stops) > 2:
-                                actual_deliveries = len(detected_stops) - 2
-                                
-                            total_waiting_mins = actual_deliveries * DELIVERY_DURATION_MINS
-                            
-                            st.markdown(f"#### 📊 Απολογισμός Μέρους {idx + 1}")
-                            st.write(f"📦 **Ενεργές Παραδόσεις στο Link:** {actual_deliveries} στάσεις")
-                            st.write(f"⏳ **Συνολικός Χρόνος Αναμονής:** {total_waiting_mins} λεπτά ({total_waiting_mins/60:.1f} ώρες)")
-                            st.caption("💡 Διάβασε τα χιλιόμετρα και τον χρόνο οδήγησης απευθείας από την οθόνη του Google Maps και πρόσθεσε τον παραπάνω χρόνο αναμονής.")
-                        else:
-                            st.error(f"Δεν ήταν δυνατή η ανάγνωση του Μέρους {idx + 1}. Δοκίμασε να ξανααντιγράψεις το link.")
-                            
