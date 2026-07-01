@@ -5,7 +5,7 @@ from geopy.geocoders import Nominatim
 import time
 import requests
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο v11.5", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο v11.6", page_icon="🚗", layout="centered")
 
 # --- 🌟 SPLASH SCREEN ---
 if 'splash_screen_shown' not in st.session_state:
@@ -36,14 +36,15 @@ if not st.session_state.splash_screen_shown:
     st.session_state.splash_screen_shown = True
     st.rerun()
 
-st.title("🚗 Smart Fuel Router v11.5")
+st.title("🚗 Smart Fuel Router v11.6")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
 DELIVERY_DURATION_MINS = 20
 
 # Αρχικοποίηση session states
-if 'manual_stops' not in st.session_state:
-    st.session_state.manual_stops = []
+if 'manual_stops' not in st.session_state: st.session_state.manual_stops = []
+if 'excel_stops' not in st.session_state: st.session_state.excel_stops = []
+if 'final_stops' not in st.session_state: st.session_state.final_stops = []
 
 def strip_accents_and_lowercase(s):
     if not isinstance(s, str): return str(s)
@@ -55,7 +56,7 @@ def strip_accents_and_lowercase(s):
 @st.cache_data(show_spinner=False)
 def get_coordinates(address):
     try:
-        geolocator = Nominatim(user_agent="fuel_router_v115_2026")
+        geolocator = Nominatim(user_agent="fuel_router_v116_2026")
         location = geolocator.geocode(address + ", Ελλάδα", timeout=10)
         if location: return (location.latitude, location.longitude)
     except: return None
@@ -67,7 +68,6 @@ def expand_and_get_addresses(url):
             response = requests.get(url, allow_redirects=True, timeout=10)
             final_url = response.url
         else: final_url = url
-            
         decoded_url = urllib.parse.unquote(final_url)
         stops = []
         if "dir/" in decoded_url:
@@ -97,34 +97,73 @@ def get_osrm_driving_time(origin, destination):
     except: pass
     return 12, 4.5
 
-# --- ΕΙΣΑΓΩΓΗ ΔΕΔΟΜΕΝΩΝ (EXCEL Ή MANUAL) ---
+# --- ΕΙΣΑΓΩΓΗ ΔΕΔΟΜΕΝΩΝ ---
 tab1, tab2 = st.tabs(["📂 Από Excel", "✍️ Χειροκίνητη Εισαγωγή"])
 
-stops_base_list = []
-
 with tab1:
-    uploaded_file = st.file_uploader("Ανεβάστε το αρχείο Excel (.xlsx)", type=["xlsx"])
+    uploaded_file = st.file_uploader("Ανεβάστε αρχείο Excel", type=["xlsx"])
     if uploaded_file:
         try:
             df = pd.read_excel(uploaded_file, header=1)
-            clean_columns = [strip_accents_and_lowercase(c) for c in df.columns]
-            c_addr_idx = next((i for i, c in enumerate(clean_columns) if "διευθυνση" in c or "address" in c), 1)
-            c_reg_idx = next((i for i, c in enumerate(clean_columns) if "περιοχη" in c or "city" in c), 2)
-            c_name_idx = next((i for i, c in enumerate(clean_columns) if "ονομα" in c or "name" in c), 0)
-            df = df.dropna(subset=[df.columns[c_addr_idx]])
-            for idx, row in df.iterrows():
-                stops_base_list.append({'name': str(row[df.columns[c_name_idx]]), 'address': f"{row[df.columns[c_addr_idx]]}, {row[df.columns[c_reg_idx]]}"})
+            clean_cols = [strip_accents_and_lowercase(c) for c in df.columns]
+            c_addr = next((i for i, c in enumerate(clean_cols) if "διευθυνση" in c or "address" in c), 1)
+            c_reg = next((i for i, c in enumerate(clean_cols) if "περιοχη" in c or "city" in c), 2)
+            c_name = next((i for i, c in enumerate(clean_cols) if "ονομα" in c or "name" in c), 0)
+            
+            temp_list = []
+            for _, row in df.dropna(subset=[df.columns[c_addr]]).iterrows():
+                temp_list.append({'name': str(row[df.columns[c_name]]), 'address': f"{row[df.columns[c_addr]]}, {row[df.columns[c_reg]]}"})
+            st.session_state.excel_stops = temp_list
+            st.success(f"Φορτώθηκαν {len(temp_list)} στάσεις από Excel.")
         except Exception as e: st.error(f"Σφάλμα: {e}")
 
 with tab2:
-    st.write("Προσθήκη στάσης (Διεύθυνση και Περιοχή υποχρεωτικά):")
-    name_input = st.text_input("Όνομα πελάτη (προαιρετικό):")
-    addr_input = st.text_input("Διεύθυνση:")
-    city_input = st.text_input("Περιοχή ή Χωριό:")
-    
-    if st.button("Προσθήκη Στάσης"):
-        if addr_input and city_input:
-            full_address = f"{addr_input}, {city_input}"
-            display_name = name_input if name_input else f"Στάση {len(st.session_state.manual_stops) + 1}"
-            st.session_state.manual_stops.append({'name': display_name, 'address': full_address})
+    st.write("Προσθήκη στάσης:")
+    n_in = st.text_input("Όνομα πελάτη (προαιρετικό):")
+    a_in = st.text_input("Διεύθυνση:")
+    c_in = st.text_input("Περιοχή ή Χωριό:")
+    if st.button("Προσθήκη στη λίστα"):
+        if a_in and c_in:
+            st.session_state.manual_stops.append({'name': n_in or "Νέα Στάση", 'address': f"{a_in}, {c_in}"})
             st.rerun()
+        else: st.warning("Συμπληρώστε Διεύθυνση και Περιοχή.")
+
+# --- ΚΟΥΜΠΙ ΕΠΙΒΕΒΑΙΩΣΗΣ ΓΙΑ ΥΠΟΛΟΓΙΣΜΟ ---
+if st.button("✅ Επιβεβαίωση και προετοιμασία διαδρομής"):
+    st.session_state.final_stops = st.session_state.excel_stops + st.session_state.manual_stops
+    st.rerun()
+
+# --- ΕΜΦΑΝΙΣΗ & ΥΠΟΛΟΓΙΣΜΟΙ ---
+if st.session_state.final_stops:
+    st.subheader(f"Στάσεις προς δρομολόγηση: {len(st.session_state.final_stops)}")
+    for i, s in enumerate(st.session_state.final_stops):
+        st.write(f"{i+1}. {s['name']} - {s['address']}")
+
+    st.subheader("1️⃣ ΒΗΜΑ: Links για Google Maps")
+    chunks = [st.session_state.final_stops[i:i+8] for i in range(0, len(st.session_state.final_stops), 8)]
+    curr_start = START_ADDRESS
+    for idx, chunk in enumerate(chunks):
+        waypoints = [s['address'] for s in chunk]
+        end = START_ADDRESS if idx == len(chunks)-1 else waypoints[-1]
+        stops_to_url = [curr_start] + waypoints + [end]
+        maps_url = "https://www.google.com/maps/dir/" + "/".join([urllib.parse.quote(s) for s in stops_to_url])
+        st.markdown(f"🔗 [📲 Άνοιγμα Μέρους {idx+1} στο Google Maps]({maps_url})")
+        curr_start = end
+
+    st.subheader("2️⃣ ΒΗΜΑ: Ανάλυση Πραγματικού Χρόνου")
+    l1 = st.text_input("Επικόλληση Link Μέρους 1:")
+    l2 = st.text_input("Επικόλληση Link Μέρους 2:")
+    
+    if st.button("📊 Υπολογισμός Χρόνων"):
+        for l_idx, link in enumerate([l for l in [l1, l2] if l]):
+            routes = expand_and_get_addresses(link)
+            if len(routes) >= 2:
+                total_time, total_dist, actual_stops = 0, 0, 0
+                for i in range(len(routes)-1):
+                    t, d = get_osrm_driving_time(routes[i], routes[i+1])
+                    total_time += t
+                    total_dist += d
+                    if not any(x in strip_accents_and_lowercase(routes[i+1]) for x in ["euripidou", "kallithea"]): actual_stops += 1
+                st.info(f"Μέρος {l_idx+1}: {total_dist} χλμ | {total_time} λεπτά οδήγησης | {actual_stops} στάσεις.")
+            else: st.error("Δεν βρέθηκαν στάσεις.")
+                
