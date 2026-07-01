@@ -5,7 +5,7 @@ from geopy.geocoders import Nominatim
 import time
 import requests
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο v11.7", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο v11.8", page_icon="🚗", layout="centered")
 
 # --- 🌟 SPLASH SCREEN ---
 if 'splash_screen_shown' not in st.session_state:
@@ -24,7 +24,7 @@ if not st.session_state.splash_screen_shown:
     st.session_state.splash_screen_shown = True
     st.rerun()
 
-st.title("🚗 Smart Fuel Router v11.7")
+st.title("🚗 Smart Fuel Router v11.8")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
 DELIVERY_DURATION_MINS = 20
@@ -44,20 +44,21 @@ def strip_accents_and_lowercase(s):
 @st.cache_data(show_spinner=False)
 def get_coordinates(address):
     try:
-        geolocator = Nominatim(user_agent="fuel_router_v117_2026")
+        geolocator = Nominatim(user_agent="fuel_router_v118_2026")
         location = geolocator.geocode(address + ", Ελλάδα", timeout=10)
         return (location.latitude, location.longitude) if location else None
     except: return None
 
 def expand_and_get_addresses(url):
     try:
-        response = requests.get(url, allow_redirects=True, timeout=10) if "goo.gl" in url else None
-        final_url = response.url if response else url
-        decoded_url = urllib.parse.unquote(final_url)
+        decoded_url = urllib.parse.unquote(url)
         stops = []
         if "dir/" in decoded_url:
             dir_part = decoded_url.split("dir/")[1]
-            stops = [s.split("@")[0].replace("+", " ").strip() for s in dir_part.split("/") if s.strip() and not any(x in strip_accents_and_lowercase(s) for x in ["maps", "data"])]
+            raw_stops = [s.split("@")[0].replace("+", " ").strip() for s in dir_part.split("/") if s.strip()]
+            for s in raw_stops:
+                if s and not any(x in strip_accents_and_lowercase(s) for x in ["maps", "data", "am="]):
+                    stops.append(s)
         return stops
     except: return []
 
@@ -75,28 +76,40 @@ def get_osrm_driving_time(origin, destination):
 tab1, tab2 = st.tabs(["📂 Από Excel", "✍️ Χειροκίνητη Εισαγωγή"])
 
 with tab1:
-    uploaded_file = st.file_uploader("Αρχείο Excel", type=["xlsx"])
+    uploaded_file = st.file_uploader("Ανέβασε το αρχείο Excel", type=["xlsx"])
     if uploaded_file:
-        df = pd.read_excel(uploaded_file, header=1)
-        st.session_state.excel_stops = [{'name': str(row[df.columns[0]]), 'address': f"{row[df.columns[1]]}, {row[df.columns[2]]}"} for _, row in df.dropna().iterrows()]
-        st.success("Φορτώθηκαν στάσεις από Excel.")
+        try:
+            df = pd.read_excel(uploaded_file, header=1)
+            clean_cols = [strip_accents_and_lowercase(c) for c in df.columns]
+            c_addr = next((i for i, c in enumerate(clean_cols) if "διευθυνση" in c or "address" in c), 1)
+            c_reg = next((i for i, c in enumerate(clean_cols) if "περιοχη" in c or "city" in c), 2)
+            c_name = next((i for i, c in enumerate(clean_cols) if "ονομα" in c or "name" in c), 0)
+            
+            temp = []
+            for _, row in df.dropna(subset=[df.columns[c_addr]]).iterrows():
+                temp.append({'name': str(row[df.columns[c_name]]), 'address': f"{row[df.columns[c_addr]]}, {row[df.columns[c_reg]]}"})
+            st.session_state.excel_stops = temp
+            st.success(f"Φορτώθηκαν {len(temp)} στάσεις από το Excel.")
+        except Exception as e: st.error(f"Σφάλμα ανάγνωσης Excel: {e}")
 
 with tab2:
-    n_in, a_in, c_in = st.text_input("Όνομα πελάτη:"), st.text_input("Διεύθυνση:"), st.text_input("Περιοχή/Χωριό:")
+    n_in = st.text_input("Όνομα πελάτη (προαιρετικό):")
+    a_in = st.text_input("Διεύθυνση:")
+    c_in = st.text_input("Περιοχή ή Χωριό:")
     if st.button("Προσθήκη στη λίστα"):
         if a_in and c_in:
             st.session_state.manual_stops.append({'name': n_in or "Νέα Στάση", 'address': f"{a_in}, {c_in}"})
             st.rerun()
 
-if st.button("✅ Επιβεβαίωση και προετοιμασία"):
+if st.button("✅ Επιβεβαίωση συνδυασμένης λίστας"):
     st.session_state.final_stops = st.session_state.excel_stops + st.session_state.manual_stops
     st.rerun()
 
 # --- ΑΝΑΛΥΣΗ ---
 if st.session_state.final_stops:
-    st.subheader(f"Στάσεις: {len(st.session_state.final_stops)}")
+    st.subheader(f"Σύνολο Στάσεων: {len(st.session_state.final_stops)}")
     
-    st.subheader("1️⃣ Links Google Maps")
+    st.subheader("1️⃣ Links για Google Maps")
     chunks = [st.session_state.final_stops[i:i+8] for i in range(0, len(st.session_state.final_stops), 8)]
     curr_start = START_ADDRESS
     for idx, chunk in enumerate(chunks):
@@ -107,20 +120,22 @@ if st.session_state.final_stops:
         curr_start = end
 
     st.subheader("2️⃣ Ανάλυση Χρόνων")
-    l1 = st.text_input("Link 1:")
-    l2 = st.text_input("Link 2:")
+    l1 = st.text_input("Επικόλληση Link 1:")
+    l2 = st.text_input("Επικόλληση Link 2:")
     
     if st.button("📊 Υπολογισμός Χρόνων ανά Στάση"):
         for l_idx, link in enumerate([l for l in [l1, l2] if l]):
             routes = expand_and_get_addresses(link)
             if len(routes) >= 2:
                 total_time, total_dist, actual_stops = 0, 0, 0
+                st.markdown(f"### 📋 Αναλυτικά Μέρους {l_idx+1}")
                 for i in range(len(routes)-1):
                     t, d = get_osrm_driving_time(routes[i], routes[i+1])
                     total_time += t
                     total_dist += d
                     if not any(x in strip_accents_and_lowercase(routes[i+1]) for x in ["euripidou", "kallithea"]): actual_stops += 1
-                    st.write(f"📍 **Στάση {i+1}:** {routes[i][:20]}... $\rightarrow$ {routes[i+1][:20]}... | 🚗 {t} λεπτά ({d} χλμ)")
-                st.info(f"Σύνολα Μέρους {l_idx+1}: {total_dist} χλμ | {total_time} λεπτά οδήγησης | {actual_stops} στάσεις (Αναμονή: {actual_stops * DELIVERY_DURATION_MINS} λεπτά)")
-            else: st.error("Δεν βρέθηκαν στάσεις.")
+                    st.write(f"📍 **Στάση {i+1}:** {routes[i][:25]}... $\rightarrow$ {routes[i+1][:25]}... | 🚗 {t} λεπτά ({d} χλμ)")
+                    st.markdown("---")
+                st.info(f"📊 **Σύνολα Μέρους {l_idx+1}:** {total_dist} χλμ, {total_time} λεπτά οδήγησης, {actual_stops} στάσεις (Αναμονή: {actual_stops * DELIVERY_DURATION_MINS} λ.)")
+            else: st.error("Δεν βρέθηκαν στάσεις στο Link.")
                 
