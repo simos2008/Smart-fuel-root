@@ -8,13 +8,81 @@ import re
 
 st.set_page_config(page_title="Έξυπνο Δρομολόγιο με Ωράριο", page_icon="🚗", layout="centered")
 
+# --- 🌟 SPLASH SCREEN (HTML/CSS) ---
+if 'splash_screen_shown' not in st.session_state:
+    st.session_state.splash_screen_shown = False
+
+if not st.session_state.splash_screen_shown:
+    # Ενέσιμο στυλ για την οθόνη υποδοχής
+    st.markdown("""
+        <style>
+        #splash-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: #111111;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 999999;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .splash-logo {
+            font-size: 80px;
+            animation: bounce 1.5s infinite;
+        }
+        .splash-title {
+            font-size: 32px;
+            font-weight: bold;
+            margin-top: 20px;
+            letter-spacing: 2px;
+        }
+        .splash-subtitle {
+            font-size: 16px;
+            color: #888;
+            margin-top: 10px;
+        }
+        .spinner {
+            margin-top: 30px;
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(255,255,255,0.1);
+            border-radius: 50%;
+            border-top-color: #ff4b4b;
+            animation: spin 1s ease-in-out infinite;
+        }
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-20px); }
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        </style>
+        <div id="splash-container">
+            <div class="splash-logo">🚗</div>
+            <div class="splash-title">SMART FUEL ROUTER</div>
+            <div class="splash-subtitle">Φόρτωση έξυπνου αλγορίθμου...</div>
+            <div class="spinner"></div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Κρατάει την οθόνη για 2.5 δευτερόλεπτα
+    time.sleep(2.5)
+    st.session_state.splash_screen_shown = True
+    st.rerun()
+
+# --- ΚΥΡΙΩΣ ΕΦΑΡΜΟΓΗ ---
 st.title("🚗 Smart Fuel Router")
 st.write("Η εφαρμογή υπολογίζει αποστάσεις και ωράρια, επιτρέποντας πισωγυρίσματα αν αυτό επιβάλλεται από τον χρόνο παράδοσης.")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
 AVERAGE_SPEED_KMH = 30
 
-# Αρχικοποίηση session state για τις χειροκίνητες στάσεις
 if 'manual_stops' not in st.session_state:
     st.session_state.manual_stops = []
 
@@ -47,7 +115,7 @@ def time_to_minutes(time_str):
 @st.cache_data(show_spinner=False)
 def get_coordinates(address):
     try:
-        geolocator = Nominatim(user_agent="fuel_router_v7_2026")
+        geolocator = Nominatim(user_agent="fuel_router_v8_2026")
         location = geolocator.geocode(address + ", Ελλάδα", timeout=10)
         if location:
             return (location.latitude, location.longitude)
@@ -55,10 +123,9 @@ def get_coordinates(address):
         return None
     return None
 
-# --- 1. ΦΟΡΤΩΣΗ EXCEL ---
+# --- ΦΟΡΤΩΣΗ EXCEL ---
 uploaded_file = st.file_uploader("Ανεβάστε το αρχείο Excel (.xlsx)", type=["xlsx"])
 
-# --- 2. ΧΕΙΡΟΚΙΝΗΤΗ ΠΡΟΣΘΗΚΗ ΣΤΑΣΗΣ ---
 st.markdown("---")
 st.subheader("➕ Χειροκίνητη Προσθήκη Στάσης")
 col1, col2 = st.columns(2)
@@ -81,7 +148,6 @@ if st.button("Προσθήκη Στάσης στη Λίστα"):
     else:
         st.error("Η Διεύθυνση και η Περιοχή είναι υποχρεωτικά πεδία!")
 
-# Εμφάνιση των χειροκίνητων στάσεων που έχουν προστεθεί
 if st.session_state.manual_stops:
     st.write("**Χειροκίνητες στάσεις που θα συμπεριληφθούν:**")
     for i, m_stop in enumerate(st.session_state.manual_stops):
@@ -92,10 +158,8 @@ if st.session_state.manual_stops:
 
 st.markdown("---")
 
-# --- 3. ΕΠΕΞΕΡΓΑΣΙΑ ΚΑΙ ΔΡΟΜΟΛΟΓΗΣΗ ---
 stops_base_list = []
 
-# Φόρτωση δεδομένων από Excel
 if uploaded_file is not None:
     try:
         df = pd.read_excel(uploaded_file, header=1)
@@ -123,7 +187,6 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"Σφάλμα ανάγνωσης Excel: {e}")
 
-# Ενσωμάτωση των χειροκίνητων στάσεων στη βασική λίστα
 for m_stop in st.session_state.manual_stops:
     stops_base_list.append(m_stop)
 
@@ -147,7 +210,6 @@ if stops_base_list:
                 })
             time.sleep(0.1)
 
-    # --- 4. ΔΙΑΧΕΙΡΙΣΗ ΑΠΟΥΣΙΑΣ ΠΕΛΑΤΗ (POSTPONE) ---
     st.subheader("📋 Διαχείριση Παραδόσεων & Απουσιών")
     st.write("Αν κάποιος λείπει, τσεκάρετέ τον για να μεταφερθεί στο τέλος του δρομολογίου:")
     
@@ -155,19 +217,16 @@ if stops_base_list:
     active_stops = []
     
     for i, stop in enumerate(stops_data):
-        # Δημιουργία checkbox για κάθε πελάτη
         is_absent = st.checkbox(f"❌ Λείπει / Κλειστά: {stop['name']} ({stop['address']})", key=f"absent_{i}")
         if is_absent:
             postponed_addresses.append(stop)
         else:
             active_stops.append(stop)
 
-    # Αλγόριθμος Δρομολόγησης (Πρώτα οι ενεργοί, μετά αυτοί που έλειπαν)
     ordered_stops = []
     current_coords = start_coords
     current_time = 8 * 60
     
-    # 1ος Γύρος: Ενεργοί Πελάτες
     unvisited = active_stops.copy()
     while unvisited:
         best_next = None
@@ -199,7 +258,6 @@ if stops_base_list:
             current_coords = best_next['coords']
             unvisited.remove(best_next)
 
-    # 2ος Γύρος: Προσθήκη αυτών που έλειπαν στο τέλος
     unvisited_postponed = postponed_addresses.copy()
     while unvisited_postponed:
         best_next = None
@@ -208,20 +266,16 @@ if stops_base_list:
         
         for stop in unvisited_postponed:
             dist = geodesic(current_coords, stop['coords']).kilometers
-            travel_time_mins = (dist / AVERAGE_SPEED_KMH) * 60
-            score = dist  # Στο τέλος πηγαίνουν καθαρά με βάση την κοντινότερη απόσταση
-            
+            score = dist
             if score < best_score:
                 best_score = score
                 best_next = stop
-                best_travel_time = travel_time_mins
                 
         if best_next:
             ordered_stops.append(best_next['address'])
             current_coords = best_next['coords']
             unvisited_postponed.remove(best_next)
 
-    # --- 5. ΕΜΦΑΝΙΣΗ ΧΑΡΤΩΝ GOOGLE MAPS ---
     if ordered_stops:
         st.markdown("---")
         st.success("Το δρομολόγιο ενημερώθηκε!")
