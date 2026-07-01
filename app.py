@@ -7,7 +7,7 @@ import requests
 import time
 import re
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο v3.6", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο v3.7", page_icon="🚗", layout="centered")
 
 # --- 🌟 SPLASH SCREEN ---
 if 'splash_screen_shown' not in st.session_state:
@@ -38,7 +38,7 @@ if not st.session_state.splash_screen_shown:
     st.session_state.splash_screen_shown = True
     st.rerun()
 
-st.title("🚗 Smart Fuel Router v3.6")
+st.title("🚗 Smart Fuel Router v3.7")
 st.write("Υπολογισμός σειράς με βάση τα ωράρια, 20 λεπτά αναμονή ανά παράδοση και τελικά στατιστικά μέσω OSRM.")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
@@ -69,13 +69,13 @@ def time_to_minutes(time_str):
 @st.cache_data(show_spinner=False)
 def get_coordinates(address):
     try:
-        geolocator = Nominatim(user_agent="fuel_router_v36_2026")
+        geolocator = Nominatim(user_agent="fuel_router_v37_2026")
         location = geolocator.geocode(address + ", Ελλάδα", timeout=10)
         if location: return (location.latitude, location.longitude)
     except: return None
     return None
 
-# ΝΕΑ ΣΥΝΑΡΤΗΣΗ: Υπολογίζει τη διαδρομή ανά ζευγάρια σημείων για να μην μπλοκάρει ποτέ
+# ΔΙΟΡΘΩΜΕΝΗ ΣΥΝΑΡΤΗΣΗ: Σωστή σειρά Lon,Lat για το OSRM
 def get_final_route_details_osrm_segmented(waypoints_coords):
     total_duration_mins = 0.0
     total_distance_km = 0.0
@@ -84,15 +84,15 @@ def get_final_route_details_osrm_segmented(waypoints_coords):
         p1 = waypoints_coords[i]
         p2 = waypoints_coords[i+1]
         try:
+            # Σωστή σειρά: p1[1] (Longitude) και μετά p1[0] (Latitude)
             url = f"http://router.project-osrm.org/route/v1/driving/{p1[1]},{p1[0]};{p2[1]},{p2[0]}?overview=false"
             response = requests.get(url, timeout=5)
             data = response.json()
             if data.get("code") == "Ok":
                 total_duration_mins += data["routes"][0]["duration"] / 60
                 total_distance_km += data["routes"][0]["distance"] / 1000
-            time.sleep(0.05) # Μικρή καθυστέρηση για ασφάλεια
+            time.sleep(0.05)
         except:
-            # Αν αποτύχει το OSRM για ένα κομμάτι, υπολογίζει γεωδαισιακά σαν εναλλακτική
             dist = geodesic(p1, p2).kilometers * 1.3
             total_distance_km += dist
             total_duration_mins += (dist / AVERAGE_SPEED_KMH) * 60
@@ -256,5 +256,4 @@ if stops_base_list:
             st.markdown(f"### 📍 Μέρος {idx + 1}")
             st.info(f"🔗 [📲 Άνοιγμα Μέρους {idx + 1} στο Google Maps]({maps_url})")
             current_start = current_destination
-        
             
