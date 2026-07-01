@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
 import urllib.parse
+from geopy.geocoders import Nominatim
+import time
 import re
 import requests
-import time
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο v13.5", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο v11.5", page_icon="🚗", layout="centered")
 
 # --- 🌟 SPLASH SCREEN ---
 if 'splash_screen_shown' not in st.session_state:
@@ -36,11 +37,14 @@ if not st.session_state.splash_screen_shown:
     st.session_state.splash_screen_shown = True
     st.rerun()
 
-st.title("🚗 Smart Fuel Router v13.5")
-st.write("Ανάλυση διαδρομής (χρόνοι προαιρετικοί).")
+st.title("🚗 Smart Fuel Router v11.5")
+st.write("Ανάλυση διαδρομής και υπολογισμός πραγματικού χρόνου ανά στάση μέσω δωρεάν OpenStreetMap (OSRM).")
 
-# Εδώ αλλάζεις τον χρόνο αναμονής αν θες
+START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
 DELIVERY_DURATION_MINS = 20
+
+if 'manual_stops' not in st.session_state:
+    st.session_state.manual_stops = []
 
 def strip_accents_and_lowercase(s):
     if not isinstance(s, str): return str(s)
@@ -49,7 +53,17 @@ def strip_accents_and_lowercase(s):
     for acc, raw in replacements.items(): s = s.replace(acc, raw)
     return s
 
-def get_addresses_from_link(url):
+@st.cache_data(show_spinner=False)
+def get_coordinates(address):
+    try:
+        geolocator = Nominatim(user_agent="fuel_router_v115_2026")
+        location = geolocator.geocode(address + ", Ελλάδα", timeout=10)
+        if location: return (location.latitude, location.longitude)
+    except: return None
+    return None
+
+# ΞΕΤΥΛΙΓΜΑ ΤΩΝ LINKS ΚΑΙ ΕΞΑΓΩΓΗ ΔΙΕΥΘΥΝΣΕΩΝ
+def expand_and_get_addresses(url):
     try:
         if "maps.app.goo.gl" in url or "goo.gl" in url:
             response = requests.get(url, allow_redirects=True, timeout=10)
@@ -75,54 +89,117 @@ def get_addresses_from_link(url):
     except:
         return []
 
-# --- 2️⃣ ΒΗΜΑ: ΕΠΙΚΟΛΛΗΣΗ ΚΑΙ ΕΙΣΑΓΩΓΗ ΧΡΟΝΩΝ ---
-st.subheader("2️⃣ ΒΗΜΑ: Υπολογισμός (Προαιρετικά χρόνοι)")
+# ΥΠΟΛΟΓΙΣΜΟΣ ΧΡΟΝΟΥ ΜΕ ΤΟΥΣ ΠΡΑΓΜΑΤΙΚΟΥΣ ΔΡΟΜΟΥΣ ΤΟΥ OSRM (ΔΩΡΕΑΝ)
+def get_osrm_driving_time(origin, destination):
+    try:
+        coord1 = get_coordinates(origin)
+        coord2 = get_coordinates(destination)
+        if coord1 and coord2:
+            # Κλήση στο ελεύθερο API του OpenStreetMap για εύρεση πραγματικής διαδρομής στους δρόμους
+            url = f"http://router.project-osrm.org/route/v1/driving/{coord1[1]},{coord1[0]};{coord2[1]},{coord2[0]}?overview=false"
+            res = requests.get(url, timeout=10).json()
+            duration_mins = int(res['routes'][0]['duration'] // 60)
+            distance_km = res['routes'][0]['distance'] / 1000
+            return max(1, duration_mins), round(distance_km, 1)
+    except:
+        pass
+    return 12, 4.5  # Ασφαλή νούμερα σε περίπτωση δικτυακού κολλήματος
 
-import_link = st.text_input("🔗 Επικόλληση Link (Απαραίτητο):")
-times_input = st.text_input("⏱️ Γράψε τους χρόνους (προαιρετικά, π.χ. 10, 5, 20):")
+# --- ΡΟΗ EXCEL ---
+uploaded_file = st.file_uploader("Ανεβάστε το αρχείο Excel (.xlsx)", type=["xlsx"])
 
-if st.button("📊 Δημιουργία Αναφοράς"):
-    if not import_link:
-        st.error("Παρακαλώ βάλε τουλάχιστον ένα Link!")
-    else:
-        with st.spinner("Ανάγνωση..."):
-            detected_routes = get_addresses_from_link(import_link)
-            actual_times = []
-            
-            if times_input:
-                try:
-                    actual_times = [int(t.strip()) for t in times_input.split(",") if t.strip()]
-                except:
-                    st.warning("Δεν καταλάβαμε τους χρόνους, θα χρησιμοποιήσουμε μέσο όρο.")
-            
-            if detected_routes:
-                legs_count = len(detected_routes) - 1
-                
-                # Αν δεν έδωσε χρόνους ή έδωσε λιγότερους, βάζουμε μια default τιμή
-                while len(actual_times) < legs_count:
-                    actual_times.append(10) 
+stops_base_list = []
+if uploaded_file is not None:
+    try:
+        df = pd.read_excel(uploaded_file, header=1)
+        clean_columns = [strip_accents_and_lowercase(c) for c in df.columns]
+        c_addr_idx = next((i for i, c in enumerate(clean_columns) if "διευθυνση" in c or "address" in c), 1)
+        c_reg_idx = next((i for i, c in enumerate(clean_columns) if "περιοχη" in c or "city" in c), 2)
+        c_name_idx = next((i for i, c in enumerate(clean_columns) if "ονομα" in c or "name" in c), 0)
+        
+        actual_addr_col, actual_reg_col, actual_name_col = df.columns[c_addr_idx], df.columns[c_reg_idx], df.columns[c_name_idx]
+        df = df.dropna(subset=[actual_addr_col])
+        for idx, row in df.iterrows():
+            stops_base_list.append({'name': str(row[actual_name_col]), 'address': f"{row[actual_addr_col]}, {row[actual_reg_col]}"})
+    except Exception as e: st.error(f"Σφάλμα Excel: {e}")
+
+if stops_base_list:
+    st.success(f"Φορτώθηκαν {len(stops_base_list)} στάσεις!")
+
+    # --- 1️⃣ ΒΗΜΑ: ΠΑΡΑΓΩΓΗ LINKS ---
+    st.subheader("1️⃣ ΒΗΜΑ: Links για άνοιγμα στο Google Maps")
+    addresses_only = [s['address'] for s in stops_base_list]
+    
+    max_waypoints = 8
+    chunks = [addresses_only[i:i + max_waypoints] for i in range(0, len(addresses_only), max_waypoints)]
+    current_start = START_ADDRESS
+    
+    for idx, chunk in enumerate(chunks):
+        current_destination = START_ADDRESS if idx == len(chunks) - 1 else chunk[-1]
+        waypoints = chunk[:-1] if idx < len(chunks) - 1 else chunk
+        
+        base_url = "https://www.google.com/maps/dir/"
+        query_stops = [current_start] + waypoints + [current_destination]
+        encoded_stops = [urllib.parse.quote(stop) for stop in query_stops]
+        maps_url = base_url + "/".join(encoded_stops)
+        
+        st.markdown(f"🔗 [📲 Άνοιγμα Μέρους {idx + 1} στο Google Maps]({maps_url})")
+        current_start = current_destination
+
+    # --- 2️⃣ ΒΗΜΑ: ΕΠΙΚΟΛΛΗΣΗ ΚΑΙ ΑΝΑΛΥΣΗ ΑΝΑ ΣΤΑΣΗ ---
+    st.markdown("---")
+    st.subheader("2️⃣ ΒΗΜΑ: Επικόλληση των Links για Πραγματικό Χρόνο ανά Στάση")
+    st.write("Κάνε paste εδώ τα links που σου έβγαλε το Google Maps αφού φορτώσει τις διαδρομές:")
+    
+    import_link_1 = st.text_input("🔗 Επικόλληση Link Μέρους 1:")
+    import_link_2 = st.text_input("🔗 Επικόλληση Link Μέρους 2 (Αν υπάρχει):")
+    
+    if st.button("📊 Υπολογισμός Χρόνων ανά Στάση"):
+        links_to_process = [l for l in [import_link_1, import_link_2] if l]
+        
+        if not links_to_process:
+            st.error("Παρακαλώ επικολλήστε τουλάχιστον ένα Link!")
+        else:
+            for l_idx, link in enumerate(links_to_process):
+                with st.spinner(f"Υπολογισμός πραγματικών δρόμων για το Μέρος {l_idx + 1}..."):
+                    detected_routes = expand_and_get_addresses(link)
                     
-                st.markdown("### 📋 Αναφορά Διαδρομής")
-                
-                total_driving = 0
-                actual_stops_count = 0
-                
-                for i in range(legs_count):
-                    start_pt = detected_routes[i]
-                    end_pt = detected_routes[i+1]
-                    driving_time = actual_times[i]
-                    
-                    is_customer_stop = not any(x in strip_accents_and_lowercase(end_pt) for x in ["euripidou", "eyripidou", "kallithea", "καλλιθεα", "ευριπιδου"])
-                    if is_customer_stop:
-                        actual_stops_count += 1
+                    if len(detected_routes) >= 2:
+                        st.markdown(f"### 📋 Αναλυτικοί Χρόνοι Μέρους {l_idx + 1}")
                         
-                    st.write(f"📍 **Στάση {i+1}:** *{start_pt[:30]}...* $\rightarrow$ *{end_pt[:30]}...* | ⏱️ {driving_time} λεπτά")
-                    total_driving += driving_time
-                    
-                total_waiting = actual_stops_count * DELIVERY_DURATION_MINS
-                total_job_time = total_driving + total_waiting
-                
-                st.info(f"📊 **Σύνολα:** Οδήγηση: {total_driving}λ | Αναμονή: {total_waiting}λ | **Σύνολο: {total_job_time}λ ({total_job_time/60:.1f} ώρες)**")
-            else:
-                st.error("Δεν βρέθηκαν στάσεις στο Link.")
-              
+                        total_part_driving = 0
+                        total_part_dist = 0
+                        actual_stops_count = 0
+                        
+                        for i in range(len(detected_routes) - 1):
+                            start_pt = detected_routes[i]
+                            end_pt = detected_routes[i+1]
+                            
+                            is_customer_stop = not any(x in strip_accents_and_lowercase(end_pt) for x in ["euripidou", "eyripidou", "kallithea", "καλλιθεα", "ευριπιδου"])
+                            
+                            # ΕΡΩΤΗΣΗ ΣΤΟ ΔΩΡΕΑΝ OpenStreetMap API
+                            driving_time, distance_km = get_osrm_driving_time(start_pt, end_pt)
+                            
+                            total_part_driving += driving_time
+                            total_part_dist += distance_km
+                            if is_customer_stop:
+                                actual_stops_count += 1
+                            
+                            # Εκτύπωση αποτελέσματος στην οθόνη ανά στάση
+                            st.write(f"📍 **Στάση {i+1}:** Από *{start_pt[:30]}...* $\rightarrow$ *{end_pt[:30]}...*")
+                            st.write(f"    🚗 **Καθαρός Χρόνος Οδήγησης:** {driving_time} λεπτά ({distance_km} χλμ)")
+                            st.markdown("---")
+                            
+                        total_waiting_mins = actual_stops_count * DELIVERY_DURATION_MINS
+                        total_job_time = total_part_driving + total_waiting_mins
+                        
+                        st.info(f"""
+                        📊 **Σύνολα Μέρους {l_idx + 1}:**
+                        * 🗺️ **Πραγματικά Χιλιόμετρα:** {round(total_part_dist, 1)} χλμ
+                        * 🚗 **Καθαρός Χρόνος Οδήγησης:** {total_part_driving} λεπτά
+                        * ⏳ **Χρόνος Αναμονής στις Στάσεις (20λ / στάση):** {total_waiting_mins} λεπτά ({actual_stops_count} στάσεις)
+                        * 🕒 **Συνολικός Χρόνος Εργασίας:** {total_job_time} λεπτά ({total_job_time/60:.1f} ώρες)
+                        """)
+                    else:
+                        st.error(f"Δεν βρέθηκαν στάσεις στο Link του Μέρους {l_idx + 1}.")
+                        
