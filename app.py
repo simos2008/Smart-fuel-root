@@ -42,7 +42,7 @@ st.title("🚗 Smart Fuel Router v9.5")
 st.write("Αυτόματη ανάλυση σύντομων Links (maps.app.goo.gl) για ακριβή καταμέτρηση στάσεων.")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
-DELIVERY_DURATION_MINS = 20
+DELIVERY_DURATION_MINS = 10
 
 if 'manual_stops' not in st.session_state:
     st.session_state.manual_stops = []
