@@ -5,8 +5,9 @@ from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 import time
 import re
+import requests
 
-st.set_page_config(page_title="Έξυπνο Δρομολόγιο v9.0", page_icon="🚗", layout="centered")
+st.set_page_config(page_title="Έξυπνο Δρομολόγιο v9.5", page_icon="🚗", layout="centered")
 
 # --- 🌟 SPLASH SCREEN ---
 if 'splash_screen_shown' not in st.session_state:
@@ -37,8 +38,8 @@ if not st.session_state.splash_screen_shown:
     st.session_state.splash_screen_shown = True
     st.rerun()
 
-st.title("🚗 Smart Fuel Router v9.0")
-st.write("Έξυπνη σειρά, παραγωγή Links για Google Maps και Import για τελικά στατιστικά βενζίνης.")
+st.title("🚗 Smart Fuel Router v9.5")
+st.write("Αυτόματη ανάλυση σύντομων Links (maps.app.goo.gl) για ακριβή καταμέτρηση στάσεων.")
 
 START_ADDRESS = "Ευριπίδου 36, Καλλιθέα, Αθήνα"
 DELIVERY_DURATION_MINS = 20
@@ -67,11 +68,35 @@ def time_to_minutes(time_str):
 @st.cache_data(show_spinner=False)
 def get_coordinates(address):
     try:
-        geolocator = Nominatim(user_agent="fuel_router_v90_2026")
+        geolocator = Nominatim(user_agent="fuel_router_v95_2026")
         location = geolocator.geocode(address + ", Ελλάδα", timeout=10)
         if location: return (location.latitude, location.longitude)
     except: return None
     return None
+
+# ΣΥΝΑΡΤΗΣΗ ΠΟΥ ΞΕΤΥΛΙΓΕΙ ΤΑ SHORT LINKS ΤΗΣ GOOGLE
+def expand_and_analyze_link(url):
+    try:
+        # Αν είναι σύντομο link, ακολουθούμε το redirect για να πάρουμε το μεγάλο URL
+        if "maps.app.goo.gl" in url or "goo.gl/maps" in url:
+            response = requests.get(url, allow_redirects=True, timeout=10)
+            final_url = response.url
+        else:
+            final_url = url
+            
+        decoded_url = urllib.parse.unquote(final_url)
+        
+        # 1ος Τρόπος: Έλεγχος αν είναι κλασικό link με διευθύνσεις χωρισμένες με κάθετο
+        stops = [s.strip() for s in decoded_url.split("/") if s.strip() and "http" not in s]
+        
+        # 2ος Τρόπος: Έλεγχος αν είναι link τύπου dir/origin/data (συχνό σε κινητά)
+        if "dir/" in decoded_url:
+            dir_part = decoded_url.split("dir/")[1]
+            stops = [s.split("@")[0].replace("+", " ").strip() for s in dir_part.split("/") if s.strip()]
+            
+        return stops
+    except:
+        return []
 
 # --- ΦΟΡΤΩΣΗ EXCEL & ΧΕΙΡΟΚΙΝΗΤΑ ---
 uploaded_file = st.file_uploader("Ανεβάστε το αρχείο Excel (.xlsx)", type=["xlsx"])
@@ -147,7 +172,6 @@ if stops_base_list:
     
     unvisited = active_stops.copy()
     
-    # ΥΠΟΛΟΓΙΣΜΟΣ ΣΕΙΡΑΣ ΜΕ ΒΑΣΗ ΤΑ ΠΡΑΓΜΑΤΙΚΑ ΔΕΔΟΜΕΝΑ ΣΟΥ
     AVERAGE_SPEED_KMH = 30
     while unvisited:
         best_next = None
@@ -191,12 +215,10 @@ if stops_base_list:
             current_coords = best_next['coords']
             unvisited_postponed.remove(best_next)
 
-    # ΕΜΦΑΝΙΣΗ ΑΠΟΤΕΛΕΣΜΑΤΩΝ ΚΑΙ LINKS GOOGLE MAPS
     if ordered_stops:
         st.markdown("---")
         st.success("🎯 Το δρομολόγιο οργανώθηκε επιτυχώς!")
         st.write("### 1️⃣ ΒΗΜΑ: Άνοιξε τα Links στο Google Maps")
-        st.write("Πατήστε τα παρακάτω Links για να δείτε τη σωστή διαδρομή. Μέσα από το Google Maps, κάντε αντιγραφή (copy) το τελικό Link της διεύθυνσης.")
         
         max_waypoints = 8
         chunks = [ordered_stops[i:i + max_waypoints] for i in range(0, len(ordered_stops), max_waypoints)]
@@ -217,33 +239,39 @@ if stops_base_list:
 
         st.markdown("---")
         st.write("### 2️⃣ ΒΗΜΑ: Επικόλληση των Links για Τελικά Στατιστικά")
-        st.write("Κάντε paste εδώ τα Links που αντιγράψατε από το Google Maps (αφού φορτώσουν οι αποστάσεις) για να βγει η τελική αναφορά χρόνου στάσεων.")
+        st.write("Κάντε paste τα links κοινοποίησης από το κινητό ή τον browser.")
         
-        import_link_1 = st.text_input("🔗 Επικόλληση ολόκληρου του Link για το Μέρος 1:")
-        import_link_2 = st.text_input("🔗 Επικόλληση ολόκληρου του Link για το Μέρος 2 (Αν υπάρχει):")
+        import_link_1 = st.text_input("🔗 Επικόλληση Link για το Μέρος 1:")
+        import_link_2 = st.text_input("🔗 Επικόλληση Link για το Μέρος 2 (Αν υπάρχει):")
         
         if st.button("📊 Υπολογισμός Αναφοράς Βενζίνης & Στάσεων"):
             links_to_process = [l for l in [import_link_1, import_link_2] if l]
             if not links_to_process:
-                st.error("Παρακαλώ επικολλήστε τουλάχιστον ένα Link από αυτά που ανοίξατε!")
+                st.error("Παρακαλώ επικολλήστε τουλάχιστον ένα Link!")
             else:
                 for idx, link in enumerate(links_to_process):
-                    try:
-                        decoded_url = urllib.parse.unquote(link)
-                        stops_in_link = [s for s in decoded_url.split("/") if s.strip()]
+                    with st.spinner(f"Ανάλυση συνδέσμου Μέρους {idx + 1}..."):
+                        detected_stops = expand_and_analyze_link(link)
                         
-                        actual_deliveries = 0
-                        for s in stops_in_link:
-                            if "http" not in s and "Ευριπίδου" not in s and "Καλλιθέα" not in s:
-                                actual_deliveries += 1
+                        if detected_stops:
+                            actual_deliveries = 0
+                            for s in detected_stops:
+                                s_clean = strip_accents_and_lowercase(s)
+                                # Φιλτράρουμε τις λέξεις κλειδιά που δεν αποτελούν διευθύνσεις πελατών
+                                if not any(x in s_clean for x in ["euripidou", "eyripidou", "kallithea", "καλλιθεα", "ευριπιδου", "am=", "short", "maps"]):
+                                    if len(s.strip()) > 3:
+                                        actual_deliveries += 1
+                            
+                            # Αν λόγω δομής βγει 0, βάζουμε ως ασφάλεια το πλήθος των σημείων μείον την αφετηρία/τερματισμό
+                            if actual_deliveries == 0 and len(detected_stops) > 2:
+                                actual_deliveries = len(detected_stops) - 2
                                 
-                        total_waiting_mins = actual_deliveries * DELIVERY_DURATION_MINS
-                        
-                        st.markdown(f"#### 📊 Απολογισμός Μέρους {idx + 1}")
-                        st.write(f"📦 **Ενεργές Παραδόσεις στο Link:** {actual_deliveries} στάσεις")
-                        st.write(f"⏳ **Συνολικός Χρόνος Αναμονής:** {total_waiting_mins} λεπτά ({total_waiting_mins/60:.1f} ώρες)")
-                        st.caption("💡 Δείτε τα χιλιόμετρα και τον χρόνο οδήγησης απευθείας στην καρτέλα του Google Maps και προσθέστε τον παραπάνω χρόνο αναμονής για το τελικό αποτέλεσμα.")
-                    except:
-                        st.error(f"Δεν ήταν δυνατή η ανάλυση του Link για το Μέρος {idx + 1}. Βεβαιωθείτε ότι αντιγράψατε σωστά όλη τη διεύθυνση.")
-                
-    
+                            total_waiting_mins = actual_deliveries * DELIVERY_DURATION_MINS
+                            
+                            st.markdown(f"#### 📊 Απολογισμός Μέρους {idx + 1}")
+                            st.write(f"📦 **Ενεργές Παραδόσεις στο Link:** {actual_deliveries} στάσεις")
+                            st.write(f"⏳ **Συνολικός Χρόνος Αναμονής:** {total_waiting_mins} λεπτά ({total_waiting_mins/60:.1f} ώρες)")
+                            st.caption("💡 Διάβασε τα χιλιόμετρα και τον χρόνο οδήγησης απευθείας από την οθόνη του Google Maps και πρόσθεσε τον παραπάνω χρόνο αναμονής.")
+                        else:
+                            st.error(f"Δεν ήταν δυνατή η ανάγνωση του Μέρους {idx + 1}. Δοκίμασε να ξανααντιγράψεις το link.")
+                            
